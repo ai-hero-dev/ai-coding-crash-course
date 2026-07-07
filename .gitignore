@@ -1,0 +1,19 @@
+.DS_Store
+.env
+/node_modules/
+
+# React Router
+/.react-router/
+/build/
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+.pnpm-store
+*.db-shm
+.claude/settings.local.json
+
+# JetBrains
+/.idea/
+

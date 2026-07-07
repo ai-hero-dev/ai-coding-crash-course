@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1770649064936,
+      "tag": "0000_dizzy_fenris",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1770649315128,
+      "tag": "0001_cynical_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1770650640202,
+      "tag": "0002_lying_shriek",
+      "breakpoints": true
+    }
+  ]
+}
