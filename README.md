@@ -1,5 +1,5 @@
 <div align="center">
-<a href="https://www.aihero.dev/cohorts/ai-coding-for-real-engineers-with-claude-code-2026-04">
+<a href="https://www.aihero.dev/ai-coding-crash-course">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1778752130/github-project-header-june-dark_2x.png" />
     <source media="(prefers-color-scheme: light)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1778752130/github-project-header-june-light_2x.png" />
@@ -9,9 +9,9 @@
 </div>
 <br/>
 
-> The exercise repo for [AI Coding for Real Engineers with Claude Code](https://www.aihero.dev/cohorts/ai-coding-for-real-engineers-with-claude-code-2026-04) — a 2-week learning cohort starting March 30, 2026.
+> The exercise repo for the [AI Coding Crash Course](https://www.aihero.dev/ai-coding-crash-course) — a self-paced course from Matt Pocock on AI-assisted engineering with Claude Code.
 
-This is a full-stack course platform (think a mini Udemy) built with React Router, TypeScript, SQLite, and Drizzle ORM. Throughout the cohort, you'll use Claude Code to explore, extend, and refactor this codebase — learning real engineering workflows for AI-assisted development along the way.
+This is a full-stack course platform (think a mini Udemy) built with React Router, TypeScript, SQLite, and Drizzle ORM. Throughout the course, you'll use Claude Code to explore, extend, and refactor this codebase — learning real engineering workflows for AI-assisted development along the way.
 
 ## Prerequisites
 
@@ -46,35 +46,30 @@ The app will be running at `http://localhost:5173`.
 | `npm run typecheck`            | Type-check the project                 |
 | `npm run db:migrate`           | Run database migrations                |
 | `npm run db:seed`              | Seed the database                      |
-| `npm run reset <commit>`       | Reset your repo to a lesson checkpoint |
-| `npm run cherry-pick <commit>` | Cherry-pick a lesson's solution        |
+| `npm run reset <slug>`         | Reset your repo to a lesson checkpoint |
+| `npm run cherry-pick <slug>`   | Cherry-pick a lesson's solution        |
 
 ## Course Structure
 
-The cohort is split across 6 days of content:
+The crash course works through this codebase in six sections:
 
-1. **Before We Start** — Repo setup, playground walkthrough, model recommendations
-2. **Getting to Know Claude Code** — Sessions, prompting, IDE integration, permissions
-3. **Day 1: Fundamentals** — LLM constraints, subagents, codebase exploration, building features
-4. **Day 2: Steering** — Agent files (CLAUDE.md), skills, memory, custom workflows
-5. **Day 3: Planning** — Writing PRDs, multi-phase plans, tracer bullet development
-6. **Day 4: Feedback Loops** — Test-driven development, red-green-refactor with AI
-7. **Day 5: Ralph** — Agent automation, loops, background tasks
-8. **Day 6: Human in the Loop** — Kanban workflows, research, prototyping, architecture improvement
+1. **Before We Start** — Repo setup, how to run the exercises, database migrations, and making your first change.
+2. **Concepts** — The core mental models for AI-assisted coding — reference material, no code changes.
+3. **Getting to Know Claude Code** — Sessions, context, permissions, IDE integration, and subagents.
+4. **Fundamentals** — Exploring the codebase, building features, and using skills (`grill-me`, `handoff`) to drive real work.
+5. **Steering** — Steering the agent with `AGENTS.md`/`CLAUDE.md`, custom skills, and pruning context.
+6. **Planning** — Writing a spec, turning it into multi-phase tickets, and implementing it phase by phase.
 
 ## Navigating Lessons
 
-Each lesson that involves code has a starting commit and solution commits. To jump to any point:
+Each lesson that involves code has a checkpoint commit on the `live-run-through` branch, addressed by its **slug**. To jump to any point:
 
 ```bash
-# Reset to a lesson's starting point
-npm run reset 03.04.01
+# Reset to a lesson's checkpoint
+npm run reset try-the-cli
 
-# Example: reset to the start of "Build a Feature"
-npm run reset main
-
-# Cherry-pick a solution if you want to skip ahead
-npm run cherry-pick 03.04.01
+# Cherry-pick a lesson's solution if you want to skip ahead
+npm run cherry-pick course-star-ratings
 ```
 
 ## Tech Stack
@@ -89,4 +84,4 @@ npm run cherry-pick 03.04.01
 
 ## License
 
-This repository is for enrolled students of the [AI Coding for Real Engineers](https://www.aihero.dev/cohorts/ai-coding-for-real-engineers-with-claude-code-2026-04) cohort. All rights reserved.
+This repository is for students of the [AI Coding Crash Course](https://www.aihero.dev/ai-coding-crash-course). All rights reserved.
