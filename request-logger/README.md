@@ -1,4 +1,4 @@
-# agent-proxy
+# request-logger
 
 A tiny, dependency-free proxy that sits between a coding-agent CLI and the model
 provider's API, and writes a **readable Markdown document of every request** —
@@ -9,14 +9,14 @@ going over the wire.
 ## Run it
 
 ```bash
-npm run agent-proxy
+npm run request-logger
 # → listening on http://localhost:8787
 ```
 
 Override the port with `PORT`:
 
 ```bash
-PORT=9000 npm run agent-proxy
+PORT=9000 npm run request-logger
 ```
 
 ## Point a CLI at it
@@ -48,7 +48,7 @@ OPENAI_BASE_URL=http://localhost:8787 codex
 
 ## What you get
 
-Every request writes three files to `agent-proxy/logs/` (gitignored), sharing a
+Every request writes three files to `request-logger/logs/` (gitignored), sharing a
 base name like `2026-07-07T14-32-05-123_anthropic`:
 
 | file             | contents                                             |

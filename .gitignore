@@ -17,7 +17,7 @@
 # JetBrains
 /.idea/
 
-# agent-proxy captured logs (may contain your own code/prompts)
-/agent-proxy/logs/*
-!/agent-proxy/logs/.gitkeep
+# request-logger captured logs (may contain your own code/prompts)
+/request-logger/logs/*
+!/request-logger/logs/.gitkeep
 

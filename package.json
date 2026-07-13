@@ -10,7 +10,7 @@
     "build": "react-router build",
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
-    "agent-proxy": "tsx agent-proxy/proxy.ts",
+    "request-logger": "tsx request-logger/proxy.ts",
     "typecheck": "react-router typegen && tsc",
     "test": "vitest run",
     "test:watch": "vitest",

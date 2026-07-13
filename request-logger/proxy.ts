@@ -1,12 +1,12 @@
 /**
- * agent-proxy — a readable request logger for coding-agent CLIs.
+ * request-logger — see every request your coding-agent CLI sends to the model.
  *
  * Sits between a coding agent (Claude Code, Codex) and the model provider's
  * API. It forwards every request untouched — auth header and all — streams the
  * response straight back so the CLI is unaffected, and writes a human-readable
  * Markdown document for each request showing exactly what was sent to the model.
  *
- * Run:   npm run agent-proxy      (or: npx tsx agent-proxy/proxy.ts)
+ * Run:   npm run request-logger      (or: npx tsx request-logger/proxy.ts)
  * Point a CLI at it, e.g.:
  *   ANTHROPIC_BASE_URL=http://localhost:8787 claude
  *   OPENAI_BASE_URL=http://localhost:8787 codex
@@ -94,12 +94,12 @@ function handle(req: http.IncomingMessage, res: http.ServerResponse): void {
   const provider = detectProvider(reqPath, req.headers);
 
   if (!provider) {
-    console.warn(`[agent-proxy] no provider match for ${req.method} ${reqPath}`);
+    console.warn(`[request-logger] no provider match for ${req.method} ${reqPath}`);
     res.writeHead(404, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
         error:
-          "agent-proxy: could not determine provider from path. Expected an " +
+          "request-logger: could not determine provider from path. Expected an " +
           "Anthropic (/v1/messages) or OpenAI (/responses, /chat/completions) endpoint.",
       })
     );
@@ -147,11 +147,11 @@ function handle(req: http.IncomingMessage, res: http.ServerResponse): void {
     );
 
     upstreamReq.on("error", (err) => {
-      console.error(`[agent-proxy] upstream error: ${err.message}`);
+      console.error(`[request-logger] upstream error: ${err.message}`);
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "application/json" });
       }
-      res.end(JSON.stringify({ error: `agent-proxy upstream error: ${err.message}` }));
+      res.end(JSON.stringify({ error: `request-logger upstream error: ${err.message}` }));
     });
 
     if (body.length > 0) upstreamReq.write(body);
@@ -173,7 +173,7 @@ interface Capture {
 
 function writeCapture(c: Capture): void {
   if (isTokenCount(c.path)) {
-    console.log(`[agent-proxy] ${c.provider}  ${c.method} ${c.path} -> ${c.statusCode}  (count_tokens, not logged)`);
+    console.log(`[request-logger] ${c.provider}  ${c.method} ${c.path} -> ${c.statusCode}  (count_tokens, not logged)`);
     return;
   }
   try {
@@ -182,17 +182,17 @@ function writeCapture(c: Capture): void {
     fs.writeFileSync(path.join(LOG_DIR, `${c.base}.response.txt`), c.responseRaw);
     fs.writeFileSync(path.join(LOG_DIR, `${c.base}.md`), renderMarkdown(c));
     console.log(
-      `[agent-proxy] ${c.provider}  ${c.method} ${c.path} -> ${c.statusCode}  logs/${c.base}.md`
+      `[request-logger] ${c.provider}  ${c.method} ${c.path} -> ${c.statusCode}  logs/${c.base}.md`
     );
   } catch (err) {
-    console.error(`[agent-proxy] failed to write logs: ${(err as Error).message}`);
+    console.error(`[request-logger] failed to write logs: ${(err as Error).message}`);
   }
 }
 
 http.createServer(handle).listen(PORT, () => {
-  console.log(`[agent-proxy] listening on http://localhost:${PORT}`);
-  console.log(`[agent-proxy] writing logs to ${LOG_DIR}`);
+  console.log(`[request-logger] listening on http://localhost:${PORT}`);
+  console.log(`[request-logger] writing logs to ${LOG_DIR}`);
   console.log(
-    `[agent-proxy] point a CLI at it, e.g. ANTHROPIC_BASE_URL=http://localhost:${PORT} claude`
+    `[request-logger] point a CLI at it, e.g. ANTHROPIC_BASE_URL=http://localhost:${PORT} claude`
   );
 });
