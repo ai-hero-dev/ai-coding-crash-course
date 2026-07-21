@@ -1,5 +1,5 @@
 import { eq, and, sql } from "drizzle-orm";
-import { db } from "~/db";
+import { db, getSqlite } from "~/db";
 import {
   quizzes,
   quizQuestions,
@@ -7,9 +7,6 @@ import {
   quizAttempts,
   quizAnswers,
 } from "~/db/schema";
-import Database from "better-sqlite3";
-
-const rawDb = new Database("data.db");
 
 function scoreMultipleChoiceQuestions(quizData: any, answers: any): any {
   let correctCount = 0;
@@ -277,7 +274,7 @@ export function computeResult(
 
 export function getQuizStats(quizId: any): any {
   try {
-    const rows: any = rawDb
+    const rows: any = getSqlite()
       .prepare(
         `SELECT
         COUNT(*) as total_attempts,
@@ -320,7 +317,7 @@ export function getQuizStats(quizId: any): any {
 
 export function getUserQuizHistory(userId: any, quizId: any): any {
   try {
-    const attempts = rawDb
+    const attempts = getSqlite()
       .prepare(
         `SELECT id, score, passed, attempted_at FROM quiz_attempts
        WHERE user_id = ? AND quiz_id = ?
