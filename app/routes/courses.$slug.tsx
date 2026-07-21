@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
+import { z } from "zod";
 import type { Route } from "./+types/courses.$slug";
 import {
   getCourseBySlug,
@@ -42,6 +43,18 @@ import { formatDuration, formatPrice } from "~/lib/utils";
 import { renderMarkdown } from "~/lib/markdown.server";
 import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice, getCountryTierInfo } from "~/lib/ppp";
+import { parseFormData } from "~/lib/validation";
+import {
+  findRating,
+  getCourseRatingSummary,
+  rateCourse,
+} from "~/services/courseRatingService";
+import { MAX_RATING, MIN_RATING } from "~/lib/ratings";
+import { StarRating, StarRatingInput } from "~/components/star-rating";
+
+const ratingSchema = z.object({
+  rating: z.coerce.number().int().min(MIN_RATING).max(MAX_RATING),
+});
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Course";
@@ -96,6 +109,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? await renderMarkdown(courseWithDetails.salesCopy)
     : null;
 
+  const ratingSummary = getCourseRatingSummary(course.id);
+  const userRating = currentUserId
+    ? (findRating(currentUserId, course.id)?.rating ?? null)
+    : null;
+
   const country = await resolveCountry(request);
   const pppPrice = courseWithDetails.pppEnabled
     ? calculatePppPrice(courseWithDetails.price, country)
@@ -113,10 +131,42 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     currentUserId,
     pppPrice,
     tierInfo,
+    ratingSummary,
+    userRating,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+// Enrollment is handled via the purchase confirmation page — this action only
+// records star ratings.
+export async function action({ params, request }: Route.ActionArgs) {
+  const currentUserId = await getCurrentUserId(request);
+
+  if (!currentUserId) {
+    throw data("You must be logged in to rate a course.", { status: 401 });
+  }
+
+  const course = getCourseBySlug(params.slug);
+  if (!course) {
+    throw data("Course not found", { status: 404 });
+  }
+
+  if (!isUserEnrolled(currentUserId, course.id)) {
+    throw data("You must be enrolled in this course to rate it.", {
+      status: 403,
+    });
+  }
+
+  const formData = await request.formData();
+  const parsed = parseFormData(formData, ratingSchema);
+
+  if (!parsed.success) {
+    return { ok: false as const, error: "Please choose a rating from 1 to 5." };
+  }
+
+  rateCourse(currentUserId, course.id, parsed.data.rating);
+
+  return { ok: true as const, error: null };
+}
 
 export function HydrateFallback() {
   return (
@@ -181,6 +231,8 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     currentUserId,
     pppPrice,
     tierInfo,
+    ratingSummary,
+    userRating,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -298,6 +350,12 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
             </Link>
           )}
         </div>
+        <StarRating
+          average={ratingSummary.average}
+          count={ratingSummary.count}
+          size="md"
+          className="mb-3"
+        />
         <p className="mb-4 text-lg text-muted-foreground">
           {course.description}
         </p>
@@ -413,6 +471,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
                       Buy More Seats
                     </Button>
                   </Link>
+                  <RateCourse userRating={userRating} />
                 </>
               ) : (
                 enrollButton
@@ -446,6 +505,40 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
           </Card>
         </div>
       </div>
+    </div>
+  );
+}
+
+function RateCourse({ userRating }: { userRating: number | null }) {
+  const fetcher = useFetcher<{ ok: boolean; error: string | null }>();
+  const isSubmitting = fetcher.state !== "idle";
+
+  // Show the star the user just clicked while the request is in flight.
+  const pendingRating = fetcher.formData?.get("rating");
+  const displayedRating =
+    pendingRating !== null && pendingRating !== undefined
+      ? Number(pendingRating)
+      : userRating;
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.error) {
+      toast.error(fetcher.data.error);
+    }
+  }, [fetcher.state, fetcher.data]);
+
+  return (
+    <div className="border-t pt-4">
+      <p className="mb-2 text-sm font-medium">
+        {userRating ? "Your rating" : "Rate this course"}
+      </p>
+      <fetcher.Form method="post">
+        <StarRatingInput value={displayedRating} disabled={isSubmitting} />
+      </fetcher.Form>
+      {userRating && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Click a star to change your rating.
+        </p>
+      )}
     </div>
   );
 }
