@@ -15,6 +15,8 @@ import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount } from "~/services/progressService";
 import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice } from "~/lib/ppp";
+import { getCourseRatingSummaries } from "~/services/courseRatingService";
+import { StarRating } from "~/components/star-rating";
 
 export function meta() {
   return [
@@ -55,17 +57,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
   }
 
+  const ratingSummaries = getCourseRatingSummaries(courses.map((c) => c.id));
+
   const coursesWithLessonCount = courses.map((course) => {
     const userProgress = progressMap.get(course.id);
     const pppPrice = course.pppEnabled
       ? calculatePppPrice(course.price, country)
       : course.price;
+    const rating = ratingSummaries.get(course.id);
     return {
       ...course,
       lessonCount: getLessonCountForCourse(course.id),
       progress: userProgress?.progress ?? null,
       completedLessons: userProgress?.completedLessons ?? null,
       pppPrice,
+      ratingAverage: rating?.average ?? null,
+      ratingCount: rating?.count ?? 0,
     };
   });
 
@@ -81,6 +88,7 @@ function CourseCardSkeleton() {
       <CardHeader>
         <Skeleton className="mb-1 h-3 w-16" />
         <Skeleton className="h-5 w-3/4" />
+        <Skeleton className="mt-1 h-4 w-24" />
       </CardHeader>
       <CardContent>
         <Skeleton className="mb-1 h-3 w-full" />
@@ -204,6 +212,11 @@ export default function CourseCatalog({ loaderData }: Route.ComponentProps) {
                   <h3 className="text-lg font-semibold leading-tight group-hover:text-primary">
                     {course.title}
                   </h3>
+                  <StarRating
+                    average={course.ratingAverage}
+                    count={course.ratingCount}
+                    className="mt-1"
+                  />
                 </CardHeader>
                 <CardContent>
                   <p className="line-clamp-2 text-sm text-muted-foreground">
