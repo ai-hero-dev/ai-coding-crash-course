@@ -29,6 +29,13 @@
       "when": 1785851807767,
       "tag": "0003_lean_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785851988889,
+      "tag": "0004_reflective_genesis",
+      "breakpoints": true
     }
   ]
 }
