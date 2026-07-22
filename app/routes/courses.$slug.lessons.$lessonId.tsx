@@ -9,7 +9,21 @@ import {
 import { getLessonById } from "~/services/lessonService";
 import { getModuleById } from "~/services/moduleService";
 import { getCurrentUserId } from "~/lib/session";
-import { isUserEnrolled } from "~/services/enrollmentService";
+import { getAccess, requireContentAccess } from "~/lib/access.server";
+import { getUserById } from "~/services/userService";
+import {
+  getLessonThread,
+  createComment,
+  updateComment,
+  deleteComment,
+  getCommentById,
+  type ThreadComment,
+} from "~/services/commentService";
+import { renderComment } from "~/lib/comment-markdown.server";
+import {
+  CommentThread,
+  type RenderedComment,
+} from "~/components/comment-thread";
 import {
   getLessonProgress,
   getLessonProgressForCourse,
@@ -51,9 +65,7 @@ import { renderMarkdown } from "~/lib/markdown.server";
 import { YouTubePlayer } from "~/components/youtube-player";
 import { data, isRouteErrorResponse } from "react-router";
 import { z } from "zod";
-import { resolveCountry } from "~/lib/country.server";
-import { checkPppAccess, COUNTRIES } from "~/lib/ppp";
-import { findPurchase } from "~/services/purchaseService";
+import { COUNTRIES } from "~/lib/ppp";
 import { parseFormData, parseParams } from "~/lib/validation";
 
 const lessonParamsSchema = z.object({
@@ -64,6 +76,40 @@ const lessonParamsSchema = z.object({
 const markCompleteSchema = z.object({
   intent: z.literal("mark-complete"),
 });
+
+const createCommentSchema = z.object({
+  intent: z.literal("create-comment"),
+  body: z.string(),
+  parentId: z.coerce.number().int().optional(),
+});
+
+const editCommentSchema = z.object({
+  intent: z.literal("edit-comment"),
+  commentId: z.coerce.number().int(),
+  body: z.string(),
+});
+
+const deleteCommentSchema = z.object({
+  intent: z.literal("delete-comment"),
+  commentId: z.coerce.number().int(),
+});
+
+/**
+ * Renders every comment body to sanitised HTML, preserving the reply nesting.
+ * Comments are untrusted input, so this must be renderComment — never
+ * renderMarkdown, which lets raw HTML through for trusted lesson content.
+ */
+async function renderThread(
+  nodes: ThreadComment[]
+): Promise<RenderedComment[]> {
+  return Promise.all(
+    nodes.map(async (node) => ({
+      ...node,
+      bodyHtml: node.deleted ? "" : await renderComment(node.body),
+      replies: await renderThread(node.replies),
+    }))
+  );
+}
 
 export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.lesson?.title ?? "Lesson";
@@ -132,16 +178,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Lesson not found in this course", { status: 404 });
   }
 
-  const currentUserId = await getCurrentUserId(request);
-  let enrolled = false;
+  const access = await getAccess(request, course.id);
+  const currentUserId = access.userId;
+  const enrolled = access.enrolled;
   let lessonStatus: string | null = null;
   let lastWatchPosition = 0;
   let watchProgress = 0;
   let lessonProgressMap: Record<number, string> = {};
 
   if (currentUserId) {
-    enrolled = isUserEnrolled(currentUserId, course.id);
-
     if (enrolled) {
       // Mark lesson as in-progress when viewed
       markLessonInProgress(currentUserId, lessonId);
@@ -172,24 +217,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
-  // PPP Access Guard
-  let pppBlocked = false;
-  let pppBlockedCountry: string | null = null;
-  let pppPurchaseCountry: string | null = null;
+  // PPP Access Guard — resolved by getAccess, which treats a blocked user as
+  // having no access to the course's content at all.
+  const {
+    pppBlocked,
+    pppBlockedCountry,
+    pppPurchaseCountry,
+    canViewContent,
+  } = access;
 
-  if (enrolled && currentUserId) {
-    const purchase = findPurchase(currentUserId, course.id);
-    const currentCountry = await resolveCountry(request);
-    const pppResult = checkPppAccess(
-      course.price,
-      course.pppEnabled,
-      purchase?.country ?? null,
-      currentCountry
-    );
-    pppBlocked = pppResult.blocked;
-    pppBlockedCountry = pppResult.blockedCountry;
-    pppPurchaseCountry = pppResult.purchaseCountry;
-  }
+  // Comments are confidential to the course: only people who can read the
+  // lesson can read the discussion on it.
+  const instructor = getUserById(course.instructorId);
+  const comments = canViewContent
+    ? await renderThread(getLessonThread(lessonId))
+    : [];
 
   // Render lesson content from Markdown to HTML server-side
   const contentHtml = lesson.content
@@ -281,6 +323,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    comments,
+    canViewContent,
+    canModerate: access.isStaff,
+    instructorName: instructor?.name ?? "your instructor",
   };
 }
 
@@ -299,6 +345,65 @@ export async function action({ params, request }: Route.ActionArgs) {
 
   const formData = await request.formData();
   const intent = formData.get("intent");
+
+  // Comment intents re-check access here rather than relying on the loader —
+  // loader guards don't protect actions.
+  if (
+    intent === "create-comment" ||
+    intent === "edit-comment" ||
+    intent === "delete-comment"
+  ) {
+    const access = await requireContentAccess(request, course.id);
+
+    try {
+      if (intent === "create-comment") {
+        const parsed = parseFormData(formData, createCommentSchema);
+        if (!parsed.success) {
+          return { ok: false, error: "Enter a comment before posting." };
+        }
+        createComment(
+          currentUserId,
+          lessonId,
+          parsed.data.parentId ?? null,
+          parsed.data.body
+        );
+        return { ok: true };
+      }
+
+      if (intent === "edit-comment") {
+        const parsed = parseFormData(formData, editCommentSchema);
+        if (!parsed.success) {
+          return { ok: false, error: "Enter a comment before saving." };
+        }
+        // Scope the id to this lesson so a comment elsewhere can't be reached
+        // by posting its id to this route.
+        const existing = getCommentById(parsed.data.commentId);
+        if (!existing || existing.lessonId !== lessonId) {
+          throw data("Comment not found", { status: 404 });
+        }
+        updateComment(parsed.data.commentId, currentUserId, parsed.data.body);
+        return { ok: true };
+      }
+
+      const parsed = parseFormData(formData, deleteCommentSchema);
+      if (!parsed.success) {
+        return { ok: false, error: "Could not delete that comment." };
+      }
+      const existing = getCommentById(parsed.data.commentId);
+      if (!existing || existing.lessonId !== lessonId) {
+        throw data("Comment not found", { status: 404 });
+      }
+      deleteComment(parsed.data.commentId, currentUserId, access.isStaff);
+      return { ok: true };
+    } catch (error) {
+      // Service validation failures are user-correctable; anything thrown as a
+      // Response (404 above) should keep bubbling.
+      if (error instanceof Error) {
+        return { ok: false, error: error.message };
+      }
+      throw error;
+    }
+  }
 
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
@@ -382,6 +487,10 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    comments,
+    canViewContent,
+    canModerate,
+    instructorName,
   } = loaderData;
   const [autoplay, toggleAutoplay] = useAutoplay();
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
@@ -590,6 +699,17 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
                 </fetcher.Form>
               )}
             </div>
+          )}
+
+          {/* Questions & Discussion — confidential to people with access */}
+          {canViewContent && (
+            <CommentThread
+              comments={comments}
+              currentUserId={currentUserId}
+              canModerate={canModerate}
+              canPost
+              instructorName={instructorName}
+            />
           )}
 
           {/* Prev/Next Navigation */}
