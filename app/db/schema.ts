@@ -3,7 +3,9 @@ import {
   text,
   integer,
   real,
+  index,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
 export enum UserRole {
@@ -270,6 +272,40 @@ export const courseRatings = sqliteTable(
       table.userId,
       table.courseId
     ),
+  ]
+);
+
+export const comments = sqliteTable(
+  "comments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    lessonId: integer("lesson_id")
+      .notNull()
+      .references(() => lessons.id),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    // Null for a top-level comment. Replies are one level deep only — a parent
+    // must itself be top-level. Enforced in commentService.
+    parentId: integer("parent_id").references(
+      (): AnySQLiteColumn => comments.id
+    ),
+    // Markdown, 1–5000 chars. Enforced in commentService, rendered by
+    // renderComment (untrusted input — never renderMarkdown).
+    body: text("body").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    // Null until the author edits. An explicit column rather than comparing
+    // updatedAt to createdAt, which collide when both writes land in the same
+    // millisecond.
+    editedAt: text("edited_at"),
+    // Soft delete. Deleted top-level comments keep their replies readable.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    index("comments_lesson_idx").on(table.lessonId),
+    index("comments_parent_idx").on(table.parentId),
   ]
 );
 
