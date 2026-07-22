@@ -36,6 +36,13 @@
       "when": 1785851988889,
       "tag": "0004_reflective_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785852019957,
+      "tag": "0005_tricky_spyke",
+      "breakpoints": true
     }
   ]
 }
