@@ -36,6 +36,7 @@ function createCourse(title: string, slug: string) {
       title,
       slug,
       description: "Another course",
+      salesCopy: "Sales copy for another course.",
       instructorId: base.instructor.id,
       categoryId: base.category.id,
       status: schema.CourseStatus.Published,

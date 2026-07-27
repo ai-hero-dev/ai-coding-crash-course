@@ -105,9 +105,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 
   // Render sales copy from Markdown to HTML server-side
-  const salesCopyHtml = courseWithDetails.salesCopy
-    ? await renderMarkdown(courseWithDetails.salesCopy)
-    : null;
+  const salesCopyHtml = await renderMarkdown(courseWithDetails.salesCopy);
 
   const ratingSummary = getCourseRatingSummary(course.id);
   const userRating = currentUserId
@@ -385,14 +383,10 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
       <div className="grid gap-8 lg:grid-cols-3">
         {/* Left column: sales copy + course content */}
         <div className="lg:col-span-2">
-          {salesCopyHtml ? (
-            <div
-              className="prose prose-neutral dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: salesCopyHtml }}
-            />
-          ) : (
-            <p className="text-muted-foreground">{course.description}</p>
-          )}
+          <div
+            className="prose prose-neutral dark:prose-invert max-w-none"
+            dangerouslySetInnerHTML={{ __html: salesCopyHtml }}
+          />
 
           {/* Bottom CTA */}
           {!enrolled && !isInstructor && (
