@@ -34,7 +34,7 @@ describe("purchaseService", () => {
       expect(purchase).toBeDefined();
       expect(purchase.userId).toBe(base.user.id);
       expect(purchase.courseId).toBe(base.course.id);
-      expect(purchase.pricePaid).toBe(4999);
+      expect(purchase.amountPaid).toBe(4999);
       expect(purchase.country).toBe("US");
     });
 
@@ -45,7 +45,7 @@ describe("purchaseService", () => {
 
     it("stores discounted price correctly", () => {
       const purchase = createPurchase(base.user.id, base.course.id, 2500, "IN");
-      expect(purchase.pricePaid).toBe(2500);
+      expect(purchase.amountPaid).toBe(2500);
       expect(purchase.country).toBe("IN");
     });
   });
@@ -57,7 +57,7 @@ describe("purchaseService", () => {
       createPurchase(base.user.id, base.course.id, 4999, "US");
       const found = findPurchase(base.user.id, base.course.id);
       expect(found).toBeDefined();
-      expect(found!.pricePaid).toBe(4999);
+      expect(found!.amountPaid).toBe(4999);
     });
 
     it("returns undefined when no purchase exists", () => {
@@ -105,7 +105,7 @@ describe("purchaseService", () => {
       expect(result.purchase).toBeDefined();
       expect(result.purchase.userId).toBe(base.user.id);
       expect(result.purchase.courseId).toBe(base.course.id);
-      expect(result.purchase.pricePaid).toBe(10000);
+      expect(result.purchase.amountPaid).toBe(10000);
       expect(result.team).toBeDefined();
       expect(result.coupons).toHaveLength(3);
     });

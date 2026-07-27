@@ -202,7 +202,7 @@ export const purchases = sqliteTable("purchases", {
   courseId: integer("course_id")
     .notNull()
     .references(() => courses.id),
-  pricePaid: integer("price_paid").notNull(),
+  amountPaid: integer("amount_paid").notNull(),
   country: text("country"),
   createdAt: text("created_at")
     .notNull()
