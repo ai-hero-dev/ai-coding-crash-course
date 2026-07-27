@@ -1,3 +1,8 @@
+---
+name: database-migrations
+description: Database schema changes — generate the migration, update the seed, reseed. Use when editing `app/db/schema.ts`, when adding or altering a table, column, or enum, or when `npm run db:seed` fails to start.
+---
+
 # Database Migrations
 
 The database is **disposable**. `data.db` is gitignored and holds nothing but seed data, so every schema change is free: migrate, throw the file away, reseed from scratch.
