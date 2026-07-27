@@ -93,7 +93,7 @@ const courseEditorActionSchema = z.discriminatedUnion("intent", [
   z.object({ intent: z.literal("reorder-lessons"), moduleId: z.coerce.number().int(), lessonIds: z.string().min(1, "Missing lesson IDs.") }),
   z.object({ intent: z.literal("move-lesson"), lessonId: z.coerce.number().int(), targetModuleId: z.coerce.number().int(), targetPosition: z.coerce.number().int() }),
   z.object({ intent: z.literal("delete-lesson"), lessonId: z.coerce.number().int() }),
-  z.object({ intent: z.literal("update-sales-copy"), salesCopy: z.string().optional() }),
+  z.object({ intent: z.literal("update-sales-copy"), salesCopy: z.string().trim().min(1, "Sales copy cannot be empty.") }),
 ]);
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -353,7 +353,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   if (intent === "update-sales-copy") {
-    updateCourseSalesCopy(courseId, parsed.data.salesCopy || null);
+    updateCourseSalesCopy(courseId, parsed.data.salesCopy);
     return { success: true, field: "sales-copy" };
   }
 
@@ -992,8 +992,9 @@ export default function InstructorCourseEditor({
   const priceFetcher = useFetcher();
   const pppFetcher = useFetcher();
 
-  const [salesCopy, setSalesCopy] = useState(course.salesCopy ?? "");
-  const salesCopyHasChanges = salesCopy !== (course.salesCopy ?? "");
+  const [salesCopy, setSalesCopy] = useState(course.salesCopy);
+  const salesCopyHasChanges = salesCopy !== course.salesCopy;
+  const salesCopyIsEmpty = salesCopy.trim().length === 0;
 
   useEffect(() => {
     if (statusFetcher.state === "idle" && statusFetcher.data?.success) {
@@ -1498,15 +1499,25 @@ export default function InstructorCourseEditor({
               <div className="mt-4 flex items-center gap-4">
                 <Button
                   onClick={handleSalesCopySave}
-                  disabled={!salesCopyHasChanges || salesCopyFetcher.state !== "idle"}
+                  disabled={
+                    !salesCopyHasChanges ||
+                    salesCopyIsEmpty ||
+                    salesCopyFetcher.state !== "idle"
+                  }
                 >
                   <Save className="mr-1.5 size-4" />
                   {salesCopyFetcher.state !== "idle" ? "Saving..." : "Save Sales Copy"}
                 </Button>
-                {salesCopyHasChanges && (
-                  <span className="text-sm text-muted-foreground">
-                    You have unsaved changes.
+                {salesCopyIsEmpty ? (
+                  <span className="text-sm text-destructive">
+                    Sales copy cannot be empty.
                   </span>
+                ) : (
+                  salesCopyHasChanges && (
+                    <span className="text-sm text-muted-foreground">
+                      You have unsaved changes.
+                    </span>
+                  )
                 )}
               </div>
             </CardContent>
