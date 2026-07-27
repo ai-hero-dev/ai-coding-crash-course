@@ -62,7 +62,8 @@ export const courses = sqliteTable("courses", {
   slug: text("slug").notNull().unique(),
   description: text("description").notNull(),
   notes: text("notes"),
-  salesCopy: text("sales_copy"),
+  // Markdown, non-empty. Enforced in courseService.
+  salesCopy: text("sales_copy").notNull(),
   instructorId: integer("instructor_id")
     .notNull()
     .references(() => users.id),

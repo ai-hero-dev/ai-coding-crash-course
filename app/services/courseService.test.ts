@@ -25,6 +25,7 @@ import {
   createCourse,
   updateCourse,
   updateCourseStatus,
+  updateCourseSalesCopy,
   deleteCourse,
 } from "./courseService";
 
@@ -42,6 +43,7 @@ describe("courseService", () => {
         "New Course",
         "new-course",
         "A brand new course",
+        "## Why take this course?",
         base.instructor.id,
         base.category.id,
         null
@@ -51,6 +53,7 @@ describe("courseService", () => {
       expect(course.title).toBe("New Course");
       expect(course.slug).toBe("new-course");
       expect(course.description).toBe("A brand new course");
+      expect(course.salesCopy).toBe("## Why take this course?");
       expect(course.instructorId).toBe(base.instructor.id);
       expect(course.categoryId).toBe(base.category.id);
       expect(course.status).toBe(schema.CourseStatus.Draft);
@@ -62,12 +65,41 @@ describe("courseService", () => {
         "With Image",
         "with-image",
         "Has a cover",
+        "Sales copy.",
         base.instructor.id,
         base.category.id,
         "https://example.com/cover.jpg"
       );
 
       expect(course.coverImageUrl).toBe("https://example.com/cover.jpg");
+    });
+
+    it("rejects empty sales copy", () => {
+      expect(() =>
+        createCourse(
+          "No Copy",
+          "no-copy",
+          "desc",
+          "   ",
+          base.instructor.id,
+          base.category.id,
+          null
+        )
+      ).toThrow("Sales copy cannot be empty");
+    });
+  });
+
+  describe("updateCourseSalesCopy", () => {
+    it("updates the sales copy", () => {
+      const updated = updateCourseSalesCopy(base.course.id, "## New pitch");
+
+      expect(updated!.salesCopy).toBe("## New pitch");
+    });
+
+    it("rejects empty sales copy", () => {
+      expect(() => updateCourseSalesCopy(base.course.id, "   ")).toThrow(
+        "Sales copy cannot be empty"
+      );
     });
   });
 
@@ -104,7 +136,7 @@ describe("courseService", () => {
     });
 
     it("returns multiple courses", () => {
-      createCourse("Second", "second", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Second", "second", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
       const all = getAllCourses();
       expect(all).toHaveLength(2);
     });
@@ -188,7 +220,7 @@ describe("courseService", () => {
 
   describe("getPublishedCourses", () => {
     it("returns only published courses", () => {
-      createCourse("Draft", "draft", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Draft", "draft", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
       // base.course is published, new course is draft
       const published = getPublishedCourses();
       expect(published).toHaveLength(1);
@@ -206,7 +238,7 @@ describe("courseService", () => {
     });
 
     it("transitions from draft to published", () => {
-      const draft = createCourse("Draft", "draft", "desc", base.instructor.id, base.category.id, null);
+      const draft = createCourse("Draft", "draft", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
       const result = updateCourseStatus(draft.id, schema.CourseStatus.Published);
       expect(result!.status).toBe(schema.CourseStatus.Published);
     });
@@ -234,7 +266,7 @@ describe("courseService", () => {
     });
 
     it("filters by search term in title", () => {
-      createCourse("JavaScript Basics", "js-basics", "Learn JS", base.instructor.id, base.category.id, null);
+      createCourse("JavaScript Basics", "js-basics", "Learn JS", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const results = buildCourseQuery("JavaScript", null, null, null, 10, 0);
       // Only the draft JS course, not the published Test Course
@@ -244,7 +276,7 @@ describe("courseService", () => {
     });
 
     it("filters by search term in description", () => {
-      createCourse("Intro", "intro", "Learn Python programming", base.instructor.id, base.category.id, null);
+      createCourse("Intro", "intro", "Learn Python programming", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const results = buildCourseQuery("Python", null, null, null, 10, 0);
       expect(results).toHaveLength(1);
@@ -252,7 +284,7 @@ describe("courseService", () => {
     });
 
     it("filters by status", () => {
-      createCourse("Draft", "draft-c", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Draft", "draft-c", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const published = buildCourseQuery(null, null, schema.CourseStatus.Published, null, 10, 0);
       expect(published).toHaveLength(1);
@@ -269,7 +301,7 @@ describe("courseService", () => {
         .values({ name: "Design", slug: "design" })
         .returning()
         .get();
-      createCourse("Design 101", "design-101", "desc", base.instructor.id, designCat.id, null);
+      createCourse("Design 101", "design-101", "desc", "Sales copy.", base.instructor.id, designCat.id, null);
 
       const results = buildCourseQuery(null, "design", null, null, 10, 0);
       expect(results).toHaveLength(1);
@@ -277,7 +309,7 @@ describe("courseService", () => {
     });
 
     it("combines search and status filters", () => {
-      createCourse("Test Draft", "test-draft", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Test Draft", "test-draft", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const results = buildCourseQuery("Test", null, schema.CourseStatus.Published, null, 10, 0);
       expect(results).toHaveLength(1);
@@ -285,15 +317,15 @@ describe("courseService", () => {
     });
 
     it("respects limit", () => {
-      createCourse("Second", "second", "desc", base.instructor.id, base.category.id, null);
-      createCourse("Third", "third", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Second", "second", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
+      createCourse("Third", "third", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const results = buildCourseQuery(null, null, null, null, 2, 0);
       expect(results).toHaveLength(2);
     });
 
     it("respects offset", () => {
-      createCourse("Second", "second", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Second", "second", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const all = buildCourseQuery(null, null, null, null, 10, 0);
       const offset = buildCourseQuery(null, null, null, null, 10, 1);
@@ -301,8 +333,8 @@ describe("courseService", () => {
     });
 
     it("sorts by title", () => {
-      createCourse("Alpha Course", "alpha", "desc", base.instructor.id, base.category.id, null);
-      createCourse("Zeta Course", "zeta", "desc", base.instructor.id, base.category.id, null);
+      createCourse("Alpha Course", "alpha", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
+      createCourse("Zeta Course", "zeta", "desc", "Sales copy.", base.instructor.id, base.category.id, null);
 
       const results = buildCourseQuery(null, null, null, "title", 10, 0);
       expect(results[0].title).toBe("Alpha Course");
