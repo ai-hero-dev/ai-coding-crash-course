@@ -257,6 +257,7 @@ describe("categoryService", () => {
           title: "Second Course",
           slug: "second-course",
           description: "desc",
+          salesCopy: "Sales copy.",
           instructorId: base.instructor.id,
           categoryId: base.category.id,
           status: schema.CourseStatus.Draft,
