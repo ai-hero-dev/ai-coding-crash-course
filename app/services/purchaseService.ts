@@ -11,12 +11,12 @@ import { generateCoupons } from "./couponService";
 export function createPurchase(
   userId: number,
   courseId: number,
-  pricePaid: number,
+  amountPaid: number,
   country: string | null
 ) {
   return db
     .insert(purchases)
-    .values({ userId, courseId, pricePaid, country })
+    .values({ userId, courseId, amountPaid, country })
     .returning()
     .get();
 }
@@ -46,11 +46,11 @@ export function getPurchasesByCourse(courseId: number) {
 export function createTeamPurchase(
   userId: number,
   courseId: number,
-  pricePaid: number,
+  amountPaid: number,
   country: string | null,
   quantity: number
 ) {
-  const purchase = createPurchase(userId, courseId, pricePaid, country);
+  const purchase = createPurchase(userId, courseId, amountPaid, country);
   const team = getOrCreateTeamForUser(userId);
   const coupons = generateCoupons(team.id, courseId, purchase.id, quantity);
   return { purchase, team, coupons };
