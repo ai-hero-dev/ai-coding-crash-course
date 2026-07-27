@@ -1,0 +1,1 @@
+ALTER TABLE `purchases` RENAME COLUMN "price_paid" TO "amount_paid";
