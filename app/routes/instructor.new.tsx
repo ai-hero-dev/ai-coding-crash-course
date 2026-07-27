@@ -27,6 +27,7 @@ import { data, isRouteErrorResponse } from "react-router";
 const newCourseSchema = z.object({
   title: z.string().trim().min(1, "Title is required."),
   description: z.string().trim().min(1, "Description is required."),
+  salesCopy: z.string().trim().min(1, "Sales copy is required."),
   categoryId: z.string().min(1, "Category is required."),
   coverImageUrl: z.string().trim().optional(),
 });
@@ -80,7 +81,8 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ errors: parsed.errors }, { status: 400 });
   }
 
-  const { title, description, categoryId, coverImageUrl } = parsed.data;
+  const { title, description, salesCopy, categoryId, coverImageUrl } =
+    parsed.data;
 
   const slug = generateSlug(title);
 
@@ -96,6 +98,7 @@ export async function action({ request }: Route.ActionArgs) {
     title,
     slug,
     description,
+    salesCopy,
     currentUserId,
     parseInt(categoryId, 10),
     coverImageUrl || null
@@ -187,6 +190,25 @@ export default function InstructorNewCourse({
                   {errors.description}
                 </p>
               )}
+            </div>
+
+            {/* Sales Copy */}
+            <div className="space-y-2">
+              <Label htmlFor="salesCopy">Sales Copy</Label>
+              <Textarea
+                id="salesCopy"
+                name="salesCopy"
+                placeholder="Write the long-form pitch shown on the public course page..."
+                rows={8}
+                aria-invalid={errors?.salesCopy ? true : undefined}
+              />
+              {errors?.salesCopy && (
+                <p className="text-sm text-destructive">{errors.salesCopy}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Markdown. Shown on the public course page — you can refine it
+                later in the course editor.
+              </p>
             </div>
 
             {/* Category */}
