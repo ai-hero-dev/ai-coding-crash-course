@@ -37,7 +37,7 @@ function setupTeamAndPurchase(country: string | null = "US") {
     .values({
       userId: base.user.id,
       courseId: base.course.id,
-      pricePaid: 10000,
+      amountPaid: 10000,
       country,
     })
     .returning()
@@ -148,7 +148,7 @@ describe("couponService", () => {
         .values({
           userId: base.user.id,
           courseId: course2.id,
-          pricePaid: 5000,
+          amountPaid: 5000,
           country: "US",
         })
         .returning()

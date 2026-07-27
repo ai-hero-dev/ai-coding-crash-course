@@ -50,6 +50,13 @@
       "when": 1785852041264,
       "tag": "0006_condemned_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785852118768,
+      "tag": "0007_absurd_black_tarantula",
+      "breakpoints": true
     }
   ]
 }
