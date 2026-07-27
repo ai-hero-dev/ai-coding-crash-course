@@ -1787,7 +1787,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .values({
       userId: students[0].id, // Emma — bought course 1 individually
       courseId: course1.id,
-      pricePaid: 4999,
+      amountPaid: 4999,
       country: "US",
       createdAt: daysAgo(50),
     })
@@ -1798,7 +1798,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .values({
       userId: students[0].id, // Emma — bought course 2 individually
       courseId: course2.id,
-      pricePaid: 5999,
+      amountPaid: 5999,
       country: "US",
       createdAt: daysAgo(40),
     })
@@ -1808,7 +1808,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .values({
       userId: students[1].id, // James — bought course 1 with PPP discount (India)
       courseId: course1.id,
-      pricePaid: 2500,
+      amountPaid: 2500,
       country: "IN",
       createdAt: daysAgo(45),
     })
@@ -1818,7 +1818,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .values({
       userId: students[2].id, // Olivia — bought course 1 individually
       courseId: course1.id,
-      pricePaid: 4999,
+      amountPaid: 4999,
       country: "US",
       createdAt: daysAgo(35),
     })
@@ -1828,7 +1828,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .values({
       userId: students[4].id, // Sophia — bought course 1 individually
       courseId: course1.id,
-      pricePaid: 4999,
+      amountPaid: 4999,
       country: "US",
       createdAt: daysAgo(15),
     })
@@ -1860,7 +1860,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .values({
       userId: bossy.id,
       courseId: course2.id,
-      pricePaid: 5999 * 5,
+      amountPaid: 5999 * 5,
       country: "US",
       createdAt: daysAgo(30),
     })
