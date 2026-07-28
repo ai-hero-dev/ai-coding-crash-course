@@ -1,0 +1,3 @@
+interface:
+  display_name: "Testing Services"
+  short_description: "Mock the db singleton and test against an in-memory database"
