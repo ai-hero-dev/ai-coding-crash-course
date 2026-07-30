@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Matt Pocock Skills"
+  short_description: "Configure a repo's issue tracker for the skills"
+policy:
+  allow_implicit_invocation: false
