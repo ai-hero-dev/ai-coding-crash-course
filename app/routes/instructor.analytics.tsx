@@ -6,6 +6,8 @@ import {
   getAudienceSummary,
   getCourseDropOff,
   getCourseProgressSummary,
+  getCourseQuizPassRates,
+  getCourseRevenueByCountry,
   getRatingSummary,
   getRevenueByCourse,
   getRevenueOverTime,
@@ -14,9 +16,11 @@ import {
   hasPublishedCourses,
   listCourseOwners,
   listInstructorCourses,
+  type CourseCountryRevenue,
   type CourseFunnel,
   type CourseProgressSummary,
   type FunnelLesson,
+  type QuizPassRate,
   type RevenueSeries,
 } from "~/services/analyticsService";
 import { getUnansweredCounts } from "~/services/commentService";
@@ -28,6 +32,7 @@ import {
   parseAnalyticsRange,
   rangeStart,
 } from "~/lib/analytics";
+import { countryName } from "~/lib/ppp";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import {
@@ -129,6 +134,16 @@ export async function loader({ request, url }: Route.LoaderArgs) {
         : getCourseProgressSummary(selectedCourseId),
     funnel:
       selectedCourseId === null ? null : getCourseDropOff(selectedCourseId),
+    // Quiz attempts and purchases are both timestamped, so unlike the two
+    // panels above these do honour the range control.
+    quizzes:
+      selectedCourseId === null
+        ? null
+        : getCourseQuizPassRates(selectedCourseId, range),
+    countries:
+      selectedCourseId === null
+        ? null
+        : getCourseRevenueByCountry(selectedCourseId, range),
     instructors: isAdmin ? listCourseOwners() : [],
     // The platform-wide view always has courses in it, so the "publish
     // something" prompt only makes sense for one named instructor.
@@ -468,6 +483,154 @@ function DropOffFunnel({ funnel }: { funnel: CourseFunnel }) {
   );
 }
 
+/**
+ * How each quiz is going, one row apiece.
+ *
+ * The basis is spelled out above the table rather than left implied: retakes
+ * are allowed, so "pass rate" has more than one defensible meaning and the
+ * reader cannot tell which one they are looking at from the number alone.
+ */
+function QuizPassRates({ quizzes }: { quizzes: QuizPassRate[] }) {
+  if (quizzes.length === 0) {
+    return (
+      <p className="py-12 text-center text-sm text-muted-foreground">
+        This course has no quizzes yet. Add one to a lesson to see how students
+        do on it.
+      </p>
+    );
+  }
+
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="border-b text-left text-muted-foreground">
+          <th className="pb-2 font-medium">Quiz</th>
+          <th className="pb-2 text-right font-medium">Students</th>
+          <th className="pb-2 text-right font-medium">Passed</th>
+          <th className="pb-2 text-right font-medium">Pass rate</th>
+          <th className="pb-2 text-right font-medium">Average score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {quizzes.map((quiz) => (
+          <tr key={quiz.quizId} className="border-b">
+            <td className="py-3">
+              <div className="font-medium">{quiz.title}</div>
+              <div className="text-xs text-muted-foreground">
+                {quiz.moduleTitle} · {quiz.lessonTitle} · passes at{" "}
+                {quiz.passingScorePercent}%
+              </div>
+            </td>
+            {quiz.passRatePercent === null ? (
+              // Untaken, not failed: a zero here would read as a quiz everyone
+              // is flunking, which calls for the opposite reaction.
+              <td
+                className="py-3 text-right text-xs text-muted-foreground"
+                colSpan={4}
+              >
+                Nobody has attempted this quiz in this period.
+              </td>
+            ) : (
+              <>
+                <td className="py-3 text-right tabular-nums">
+                  {quiz.studentCount}
+                </td>
+                <td className="py-3 text-right tabular-nums">
+                  {quiz.passedCount}
+                </td>
+                <td className="py-3 text-right font-medium tabular-nums">
+                  {quiz.passRatePercent}%
+                </td>
+                <td className="py-3 text-right tabular-nums text-muted-foreground">
+                  {quiz.averageBestScorePercent}%
+                </td>
+              </>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** Where a course's buyers are, and what parity pricing costs the seller. */
+function RevenueByCountry({ breakdown }: { breakdown: CourseCountryRevenue }) {
+  if (breakdown.rows.length === 0) {
+    return (
+      <p className="py-12 text-center text-sm text-muted-foreground">
+        This course has no sales in this period, so there is nowhere to break
+        down yet.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <p className="mb-4 text-sm text-muted-foreground">
+        {/* The headline the panel exists for: parity discounting is otherwise
+            invisible, though it directly sets what the instructor earns — so
+            the figure is stated in net, the money they actually keep. */}
+        {formatMoney(breakdown.discountedNetCents)} of your{" "}
+        {formatMoney(breakdown.netCents)} net earnings (
+        {breakdown.discountedSharePercent}%) came from countries with a parity
+        discount. Averages are what a sale there actually fetched — list prices
+        change and are not kept, so no discount is reconstructed per purchase.
+      </p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-muted-foreground">
+            <th className="pb-2 font-medium">Country</th>
+            <th className="pb-2 text-right font-medium">Sales</th>
+            <th className="pb-2 text-right font-medium">Average paid</th>
+            <th className="pb-2 text-right font-medium">Gross</th>
+            <th className="pb-2 text-right font-medium">Net</th>
+            <th className="pb-2 text-right font-medium">Share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {breakdown.rows.map((row) => (
+            <tr key={row.country ?? "unknown"} className="border-b">
+              <td className="py-3">
+                <span className="font-medium">
+                  {row.country === null
+                    ? "Not recorded"
+                    : countryName(row.country)}
+                </span>
+                {row.discountPercent !== null && row.discountPercent > 0 && (
+                  <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-xs font-medium">
+                    {row.discountPercent}% off today
+                  </span>
+                )}
+              </td>
+              <td className="py-3 text-right tabular-nums">
+                {row.purchaseCount}
+              </td>
+              <td className="py-3 text-right tabular-nums text-muted-foreground">
+                {formatMoney(row.averagePaidCents)}
+              </td>
+              <td className="py-3 text-right tabular-nums">
+                {formatMoney(row.grossCents)}
+              </td>
+              <td className="py-3 text-right font-medium tabular-nums">
+                {formatMoney(row.netCents)}
+              </td>
+              <td className="py-3 text-right tabular-nums">
+                <span className="mr-2">{row.sharePercent}%</span>
+                <span className="inline-block h-2 w-16 rounded bg-muted align-middle">
+                  <span
+                    className="block h-2 rounded bg-primary/70"
+                    style={{ width: `${row.sharePercent}%` }}
+                  />
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 export default function InstructorAnalytics({
   loaderData,
 }: Route.ComponentProps) {
@@ -483,6 +646,8 @@ export default function InstructorAnalytics({
     courseOptions,
     progress,
     funnel,
+    quizzes,
+    countries,
     instructors,
     unpublished,
     audience,
@@ -770,6 +935,35 @@ export default function InstructorAnalytics({
                       ? "There are no courses here to look into yet."
                       : "Choose one of your courses above to see how far students get and where they give up."}
                   </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Both panels sit outside the enrolment gate above: a quiz with
+                nobody enrolled to sit it, and money arriving before anybody
+                claims their seat, are things an instructor should still be
+                told about rather than shown one "nobody is enrolled" card in
+                place of. */}
+            {quizzes && (
+              <Card>
+                <CardContent className="p-6">
+                  <h2 className="text-lg font-semibold">Quiz results</h2>
+                  <p className="mb-4 text-sm text-muted-foreground">
+                    One result per student per quiz, counting their best attempt
+                    — the same basis as the student roster. Retakes are not
+                    counted separately, so a quiz people get on the second go
+                    still reads as passed. Attempts made in this period only.
+                  </p>
+                  <QuizPassRates quizzes={quizzes} />
+                </CardContent>
+              </Card>
+            )}
+
+            {countries && (
+              <Card>
+                <CardContent className="p-6">
+                  <h2 className="text-lg font-semibold">Revenue by country</h2>
+                  <RevenueByCountry breakdown={countries} />
                 </CardContent>
               </Card>
             )}
