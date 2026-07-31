@@ -3,19 +3,24 @@ import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import type { Route } from "./+types/instructor.analytics";
 import { requireInstructorOrAdmin } from "~/lib/access.server";
 import {
+  getAudienceSummary,
+  getRatingSummary,
   getRevenueByCourse,
   getRevenueOverTime,
   getRevenueSummary,
+  getTopBuyers,
   hasPublishedCourses,
   listCourseOwners,
   type RevenueSeries,
 } from "~/services/analyticsService";
+import { getUnansweredCounts } from "~/services/commentService";
 import {
   ANALYTICS_RANGES,
   PLATFORM_FEE_PERCENT,
   formatBucket,
   formatMoney,
   parseAnalyticsRange,
+  rangeStart,
 } from "~/lib/analytics";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
@@ -84,6 +89,12 @@ export async function loader({ request, url }: Route.LoaderArgs) {
     : userId;
 
   return {
+    // Split rather than filtered: the range applies, but questions older than
+    // it are still reported, because months of silence is the urgent case.
+    questions: getUnansweredCounts(instructorId, rangeStart(range)),
+    audience: getAudienceSummary(instructorId, range),
+    buyers: getTopBuyers(instructorId, range),
+    ratings: getRatingSummary(instructorId, range),
     tab,
     range,
     isAdmin,
@@ -126,6 +137,121 @@ function MoneyCard({
         <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * A single figure with its own empty copy.
+ *
+ * Every panel says what it means when it has nothing, so an instructor can
+ * tell "nothing has happened yet" from "this is broken".
+ */
+function StatCard({
+  label,
+  value,
+  hint,
+  emptyHint,
+  action,
+}: {
+  label: string;
+  value: string | number;
+  hint: string;
+  /** Shown instead of `hint` when the figure is zero — and greys the figure. */
+  emptyHint?: string;
+  action?: React.ReactNode;
+}) {
+  const empty = emptyHint !== undefined && (value === 0 || value === "—");
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="text-sm font-medium text-muted-foreground">{label}</div>
+        <div
+          className={
+            empty
+              ? "mt-2 text-3xl font-bold text-muted-foreground"
+              : "mt-2 text-3xl font-bold"
+          }
+        >
+          {value}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {empty ? emptyHint : hint}
+        </p>
+        {action}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TopBuyers({
+  buyers,
+}: {
+  buyers: Route.ComponentProps["loaderData"]["buyers"];
+}) {
+  if (buyers.length === 0) {
+    return (
+      <p className="py-12 text-center text-sm text-muted-foreground">
+        Nobody has bought anything in this period, so there is nobody to reach
+        out to yet.
+      </p>
+    );
+  }
+
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="border-b text-left text-muted-foreground">
+          <th className="pb-2 font-medium">Buyer</th>
+          <th className="pb-2 font-medium">Seats</th>
+          <th className="pb-2 text-right font-medium">Purchases</th>
+          <th className="pb-2 text-right font-medium">Total spend</th>
+        </tr>
+      </thead>
+      <tbody>
+        {buyers.map((buyer) => (
+          <tr key={buyer.userId} className="border-b">
+            <td className="py-3">
+              <div className="font-medium">{buyer.name}</div>
+              <div className="text-xs text-muted-foreground">{buyer.email}</div>
+            </td>
+            <td className="py-3">
+              {buyer.seatsBought > 0 && (
+                <div>
+                  <span className="rounded bg-secondary px-1.5 py-0.5 text-xs font-medium">
+                    Team
+                  </span>{" "}
+                  <span className="text-xs text-muted-foreground">
+                    bought {buyer.seatsBought},{" "}
+                    {buyer.seatsUnredeemed > 0 ? (
+                      // The prompt to chase: seats paid for that nobody is
+                      // using are the most actionable thing on this table.
+                      <span className="font-medium text-foreground">
+                        {buyer.seatsUnredeemed} unused
+                      </span>
+                    ) : (
+                      "all claimed"
+                    )}
+                  </span>
+                </div>
+              )}
+              {/* Said of team buyers too, not just solo ones: the manager who
+                  bought a dozen seats and never opened the course is the very
+                  person this table exists to surface. */}
+              <div className="text-xs text-muted-foreground">
+                {buyer.enrolled ? "Enrolled" : "Never enrolled"}
+              </div>
+            </td>
+            <td className="py-3 text-right tabular-nums">
+              {buyer.purchaseCount}
+            </td>
+            <td className="py-3 text-right font-medium tabular-nums">
+              {formatMoney(buyer.spendCents)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -199,6 +325,10 @@ export default function InstructorAnalytics({
     courses,
     instructors,
     unpublished,
+    audience,
+    buyers,
+    questions,
+    ratings,
   } = loaderData;
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -323,6 +453,61 @@ export default function InstructorAnalytics({
               />
             </div>
 
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                label="Buyers"
+                value={audience.buyerCount}
+                hint="People who paid. A team buying several seats counts once."
+                emptyHint="Nobody has bought in this period."
+              />
+              <StatCard
+                label="Enrolled students"
+                value={audience.studentCount}
+                hint={`Learners with access, seats included.${
+                  audience.revenuePerStudentCents === null
+                    ? ""
+                    : ` ${formatMoney(
+                        audience.revenuePerStudentCents
+                      )} of revenue each.`
+                }`}
+                emptyHint="Nobody has enrolled in this period."
+              />
+              <StatCard
+                label="Unanswered questions"
+                value={questions.inRange}
+                hint={
+                  questions.older > 0
+                    ? `Plus ${questions.older} from before this period.`
+                    : "Students waiting on a reply."
+                }
+                // Quiet this period is only good news if the backlog is empty
+                // too, so the older count keeps its place in the empty copy.
+                emptyHint={
+                  questions.older > 0
+                    ? `None this period, but ${questions.older} still waiting from before.`
+                    : "Nothing is waiting on you."
+                }
+                action={
+                  questions.inRange + questions.older > 0 ? (
+                    <Link
+                      to="/instructor/questions"
+                      className="mt-3 inline-block text-xs font-medium text-primary hover:underline"
+                    >
+                      Answer them
+                    </Link>
+                  ) : null
+                }
+              />
+              <StatCard
+                label="Course rating"
+                value={ratings.average === null ? "—" : `${ratings.average} ★`}
+                hint={`Across ${ratings.count} ${
+                  ratings.count === 1 ? "rating" : "ratings"
+                }.`}
+                emptyHint="Nobody has rated your courses in this period."
+              />
+            </div>
+
             <Card>
               <CardContent className="p-6">
                 <h2 className="mb-4 text-lg font-semibold">
@@ -339,6 +524,17 @@ export default function InstructorAnalytics({
                 ) : (
                   <RevenueChart series={series} />
                 )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-6">
+                <h2 className="text-lg font-semibold">Top buyers</h2>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Your ten biggest spenders in this period — the people worth
+                  reaching out to.
+                </p>
+                <TopBuyers buyers={buyers} />
               </CardContent>
             </Card>
           </TabsContent>

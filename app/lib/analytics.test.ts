@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   formatBucket,
   formatMoney,
+  rangeStart,
   parseAnalyticsRange,
   splitRevenue,
 } from "./analytics";
@@ -44,6 +45,30 @@ describe("analytics config", () => {
     it("falls back to the default for junk or a missing param", () => {
       expect(parseAnalyticsRange(null)).toBe("30d");
       expect(parseAnalyticsRange("last tuesday")).toBe("30d");
+    });
+  });
+
+  describe("rangeStart", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("has no start at all for all time", () => {
+      expect(rangeStart("all")).toBeNull();
+    });
+
+    it("starts each window exactly that many days back", () => {
+      // Every panel on the page compares against this one boundary, so the
+      // service and the question queue can't disagree about what "30 days"
+      // means. Inclusive: a row stamped exactly here is inside.
+      expect(rangeStart("7d")).toBe("2026-06-08T12:00:00.000Z");
+      expect(rangeStart("30d")).toBe("2026-05-16T12:00:00.000Z");
+      expect(rangeStart("90d")).toBe("2026-03-17T12:00:00.000Z");
     });
   });
 
