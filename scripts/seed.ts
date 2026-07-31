@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
-import { eq } from "drizzle-orm";
+import { eq, gte, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -31,11 +32,29 @@ function daysAgo(n: number): string {
   return d.toISOString();
 }
 
+function hoursAgo(n: number): string {
+  const d = new Date();
+  d.setHours(d.getHours() - n);
+  return d.toISOString();
+}
+
 function slugify(title: string): string {
   return title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
+}
+
+// Deterministic PRNG (mulberry32). The generated history below is a fixture that
+// later work asserts against, so it must be identical on every run.
+function makeRandom(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // ─── Seed Data ───
@@ -72,8 +91,24 @@ async function seed() {
 
   console.log("Tables created.");
 
+  // Every count this script reports is read back out of the database. A written
+  // -down count is a count that goes stale the first time the data around it
+  // changes.
+  function countRows(table: SQLiteTable, where?: SQL) {
+    const query = db.select({ count: sql<number>`count(*)` }).from(table);
+    return (where ? query.where(where) : query).get()?.count ?? 0;
+  }
+
   // ─── Users ───
-  // 1 admin, 2 instructors, 5 students
+  // 1 admin, 3 instructors (one of whom owns no courses, so the empty
+  // instructor dashboard is reachable), and ~40 students.
+  //
+  // Students are split in two: the five named students below, who own all the
+  // hand-written narrative data (comments, quiz attempts, ratings), and the
+  // cohort generated further down, which supplies volume. Anything that picks a
+  // student out of a list does it by email, never by array position — see
+  // studentByEmail — so appending or inserting students never silently
+  // re-points a coupon redemption at someone else.
 
   const [admin] = db
     .insert(schema.users)
@@ -109,6 +144,21 @@ async function seed() {
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=marcus",
       bio: "Full-stack developer and API architect specializing in Node.js and cloud infrastructure. Has built and scaled APIs serving millions of requests daily. Conference speaker and open-source contributor.",
       createdAt: daysAgo(95),
+    })
+    .returning()
+    .all();
+
+  // Owns no courses — the instructor views must survive an instructor with
+  // nothing to show.
+  const [instructor3] = db
+    .insert(schema.users)
+    .values({
+      name: "Priya Nair",
+      email: "priya.nair@ralph.dev",
+      role: UserRole.Instructor,
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=priya",
+      bio: "Accessibility engineer and design-systems consultant. Joined to teach, has not published a course yet.",
+      createdAt: daysAgo(210),
     })
     .returning()
     .all();
@@ -167,8 +217,54 @@ async function seed() {
     .returning()
     .all();
 
+  // The wider student body. These carry the bulk purchase and progress history
+  // generated at the bottom of this file. Sign-up dates are spread across the
+  // last twelve months, including the last few days.
+  const cohortNames = [
+    "Ava Nakamura", "Noah Blackwood", "Isla Fernandes", "Ethan Okafor",
+    "Mia Lindqvist", "Lucas Moreau", "Zara Haddad", "Felix Andersen",
+    "Nina Kowalski", "Omar Rahman", "Chloe Beaumont", "Dmitri Volkov",
+    "Priya Raghavan", "Tomas Silva", "Hana Kim", "Gabriel Rossi",
+    "Amara Diallo", "Jonas Weber", "Lena Petrova", "Kwame Mensah",
+    "Sofia Ricci", "Aarav Shah", "Freya Nilsen", "Diego Castillo",
+    "Yuki Tanaka", "Rosa Delgado", "Idris Bello", "Clara Hoffmann",
+    "Mateo Alvarez", "Elif Demir", "Ruben Ortiz", "Anika Bose",
+    "Caleb Ncube", "Marta Novak",
+  ];
+
+  const cohort = db
+    .insert(schema.users)
+    .values(
+      cohortNames.map((name, i) => ({
+        name,
+        // Matches the named students above: first.last@student.dev.
+        email: `${slugify(name).replace(/-/g, ".")}@student.dev`,
+        role: UserRole.Student,
+        avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${slugify(name)}`,
+        // Spread across ~12 months, tightening towards today so the recent
+        // ranges are populated. The last few sign up inside the last week.
+        createdAt: daysAgo(Math.round(355 - i * 10.4)),
+      }))
+    )
+    .returning()
+    .all();
+
+  // Every student, named and generated. Look students up by email rather than
+  // by index — see the note in the users header.
+  const allStudents = [...students, bossy, ...cohort];
+  const studentsByEmail = new Map(allStudents.map((s) => [s.email, s]));
+
+  function studentByEmail(email: string) {
+    const student = studentsByEmail.get(email);
+    if (!student) throw new Error(`No seeded student with email ${email}`);
+    return student;
+  }
+
+  const instructorCount = 3;
+  const studentCount = allStudents.length;
+
   console.log(
-    `Created ${1 + 2 + students.length + 1} users (1 admin, 2 instructors, ${students.length + 1} students).`
+    `Created ${1 + instructorCount + studentCount} users (1 admin, ${instructorCount} instructors, ${studentCount} students).`
   );
 
   // ─── Categories ───
@@ -188,6 +284,63 @@ async function seed() {
   const catBySlug = Object.fromEntries(categoriesData.map((c) => [c.slug, c]));
 
   console.log(`Created ${categoriesData.length} categories.`);
+
+  // ─── Course content ───
+
+  type LessonSpec = {
+    title: string;
+    duration: number;
+    videoUrl?: string;
+    githubRepoUrl?: string;
+    content?: string;
+  };
+
+  type ModuleSpec = { title: string; lessons: LessonSpec[] };
+
+  // Inserts a course's modules and lessons in order and returns the lesson ids,
+  // flattened module by module. Positions are 1-based.
+  function insertCourseContent(
+    courseId: number,
+    moduleSpecs: ModuleSpec[],
+    startDaysAgo: number
+  ): number[] {
+    const lessonIds: number[] = [];
+
+    for (let mi = 0; mi < moduleSpecs.length; mi++) {
+      const modData = moduleSpecs[mi];
+      const [mod] = db
+        .insert(schema.modules)
+        .values({
+          courseId,
+          title: modData.title,
+          position: mi + 1,
+          createdAt: daysAgo(startDaysAgo - mi),
+        })
+        .returning()
+        .all();
+
+      for (let li = 0; li < modData.lessons.length; li++) {
+        const lessonData = modData.lessons[li];
+        const [lesson] = db
+          .insert(schema.lessons)
+          .values({
+            moduleId: mod.id,
+            title: lessonData.title,
+            content: lessonData.content ?? null,
+            videoUrl: lessonData.videoUrl ?? null,
+            githubRepoUrl: lessonData.githubRepoUrl ?? null,
+            position: li + 1,
+            durationMinutes: lessonData.duration,
+            createdAt: daysAgo(startDaysAgo - mi),
+          })
+          .returning()
+          .all();
+        lessonIds.push(lesson.id);
+      }
+    }
+
+    return lessonIds;
+  }
 
   // ─── Course 1: Introduction to TypeScript (Sarah Chen) ───
 
@@ -233,7 +386,7 @@ By the end of this course, you'll understand why TypeScript has become the defau
       status: CourseStatus.Published,
       coverImageUrl: "/images/course-typescript.svg",
       price: 4999,
-      createdAt: daysAgo(90),
+      createdAt: daysAgo(355),
       updatedAt: daysAgo(10),
     })
     .returning()
@@ -604,42 +757,7 @@ Practice by converting an existing JavaScript project to TypeScript. Start with 
     },
   ];
 
-  const course1LessonIds: number[] = [];
-
-  for (let mi = 0; mi < c1Modules.length; mi++) {
-    const modData = c1Modules[mi];
-    const [mod] = db
-      .insert(schema.modules)
-      .values({
-        courseId: course1.id,
-        title: modData.title,
-        position: mi + 1,
-        createdAt: daysAgo(90 - mi),
-      })
-      .returning()
-      .all();
-
-    for (let li = 0; li < modData.lessons.length; li++) {
-      const lessonData = modData.lessons[li];
-      const [lesson] = db
-        .insert(schema.lessons)
-        .values({
-          moduleId: mod.id,
-          title: lessonData.title,
-          content: lessonData.content,
-          videoUrl: lessonData.videoUrl ?? null,
-          githubRepoUrl:
-            ("githubRepoUrl" in lessonData ? lessonData.githubRepoUrl : null) ??
-            null,
-          position: li + 1,
-          durationMinutes: lessonData.duration,
-          createdAt: daysAgo(90 - mi),
-        })
-        .returning()
-        .all();
-      course1LessonIds.push(lesson.id);
-    }
-  }
+  const course1LessonIds = insertCourseContent(course1.id, c1Modules, 350);
 
   console.log(
     `Created course "${course1.title}" with ${c1Modules.length} modules and ${course1LessonIds.length} lessons.`
@@ -694,7 +812,7 @@ Every lesson is focused and practical. No 45-minute lectures where 40 minutes ar
       status: CourseStatus.Published,
       coverImageUrl: "/images/course-nodejs.svg",
       price: 5999,
-      createdAt: daysAgo(75),
+      createdAt: daysAgo(305),
       updatedAt: daysAgo(5),
     })
     .returning()
@@ -1105,45 +1223,326 @@ You've completed the Building REST APIs course. You now have the skills to build
     },
   ];
 
-  const course2LessonIds: number[] = [];
-
-  for (let mi = 0; mi < c2Modules.length; mi++) {
-    const modData = c2Modules[mi];
-    const [mod] = db
-      .insert(schema.modules)
-      .values({
-        courseId: course2.id,
-        title: modData.title,
-        position: mi + 1,
-        createdAt: daysAgo(75 - mi),
-      })
-      .returning()
-      .all();
-
-    for (let li = 0; li < modData.lessons.length; li++) {
-      const lessonData = modData.lessons[li];
-      const [lesson] = db
-        .insert(schema.lessons)
-        .values({
-          moduleId: mod.id,
-          title: lessonData.title,
-          content: lessonData.content,
-          videoUrl: lessonData.videoUrl ?? null,
-          githubRepoUrl:
-            ("githubRepoUrl" in lessonData ? lessonData.githubRepoUrl : null) ??
-            null,
-          position: li + 1,
-          durationMinutes: lessonData.duration,
-          createdAt: daysAgo(75 - mi),
-        })
-        .returning()
-        .all();
-      course2LessonIds.push(lesson.id);
-    }
-  }
+  const course2LessonIds = insertCourseContent(course2.id, c2Modules, 300);
 
   console.log(
     `Created course "${course2.title}" with ${c2Modules.length} modules and ${course2LessonIds.length} lessons.`
+  );
+
+  // ─── Course 3: Design Systems with Tailwind (Sarah Chen) ───
+  // A second selling course for Sarah, so the per-instructor views have more
+  // than one row and revenue splits across courses.
+
+  const [course3] = db
+    .insert(schema.courses)
+    .values({
+      title: "Design Systems with Tailwind",
+      slug: "design-systems-with-tailwind",
+      description:
+        "Build a design system that survives contact with a real product team. Tokens, component APIs, theming, and the discipline that keeps a system from rotting into a component graveyard.",
+      salesCopy: `## Design Systems That Survive
+
+Most design systems die the same way: a beautiful component library nobody uses, drifting out of sync with the product it was meant to serve.
+
+This course is about the other kind — the system your team reaches for because it is faster than not using it.
+
+### What You'll Learn
+
+- **Design tokens** — colour, spacing and type scales that mean something
+- **Component APIs** — variants that compose instead of multiplying
+- **Theming** — light, dark, and brand themes without a fork
+- **Governance** — how changes land without breaking every consumer
+
+## Who Is This For?
+
+Frontend developers who have built components before and watched the collection turn into a mess. Tailwind experience helps but is not required.`,
+      instructorId: instructor1.id,
+      categoryId: catBySlug["design"].id,
+      status: CourseStatus.Published,
+      coverImageUrl: "/images/course-typescript.svg",
+      price: 3999,
+      createdAt: daysAgo(200),
+      updatedAt: daysAgo(14),
+    })
+    .returning()
+    .all();
+
+  const course3LessonIds = insertCourseContent(
+    course3.id,
+    [
+      {
+        title: "Foundations",
+        lessons: [
+          {
+            title: "What a Design System Is For",
+            duration: 9,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## What a Design System Is For\n\nA design system is a shared vocabulary, not a component folder. This lesson covers what belongs in one and — more usefully — what does not.",
+          },
+          {
+            title: "Design Tokens",
+            duration: 14,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## Design Tokens\n\nColour, spacing, radius and type scales expressed as named values, so a change lands in one place instead of two hundred.",
+          },
+          {
+            title: "Spacing and Type Scales",
+            duration: 12,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## Scales\n\nWhy a constrained scale produces better layouts than free choice, and how to pick one you can live with.",
+          },
+        ],
+      },
+      {
+        title: "Components",
+        lessons: [
+          {
+            title: "Variants and Composition",
+            duration: 18,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            githubRepoUrl:
+              "https://github.com/total-typescript/design-system-variants",
+            content:
+              "## Variants\n\nA variant API that composes beats one that enumerates. We build a button whose options multiply without the source doing the same.",
+          },
+          {
+            title: "Accessible Primitives",
+            duration: 16,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## Accessible Primitives\n\nFocus management, keyboard interaction and ARIA — handled once in the primitive rather than in every consumer.",
+          },
+          {
+            title: "Theming and Dark Mode",
+            duration: 15,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## Theming\n\nOne set of components, several themes, no forks. CSS custom properties do most of the work.",
+          },
+        ],
+      },
+      {
+        title: "Living With It",
+        lessons: [
+          {
+            title: "Documentation That Gets Read",
+            duration: 11,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## Documentation\n\nDocs next to the code, examples that run, and the one page every new team member actually opens.",
+          },
+          {
+            title: "Versioning and Breaking Changes",
+            duration: 13,
+            videoUrl: "https://www.youtube.com/watch?v=zQnBQ4tB3ZA",
+            content:
+              "## Breaking Changes\n\nHow to ship a breaking change to twelve teams without becoming the reason they fork.",
+          },
+          {
+            title: "Course Wrap-Up",
+            duration: 6,
+            content:
+              "## Wrap-Up\n\nYou have a token layer, a component API you can defend, and a story for how changes land. Go and delete some CSS.",
+          },
+        ],
+      },
+    ],
+    195
+  );
+
+  console.log(
+    `Created course "${course3.title}" with 3 modules and ${course3LessonIds.length} lessons.`
+  );
+
+  // ─── Course 4: Practical Data Visualisation (Marcus Johnson) ───
+  // Published but has never sold. The analytics views must render a course with
+  // zero revenue, zero enrolments and zero progress without dividing by it.
+
+  const [course4] = db
+    .insert(schema.courses)
+    .values({
+      title: "Practical Data Visualisation",
+      slug: "practical-data-visualisation",
+      description:
+        "Turn data into charts people can actually read. Chart selection, scales, colour, and the accessibility rules most dashboards break.",
+      salesCopy: `## Charts People Can Read
+
+A chart is an argument. This course is about making the argument clearly — picking the right encoding, scaling it honestly, and colouring it so everyone can read it.
+
+### Topics
+
+- Choosing an encoding that matches the question
+- Scales, axes, and the zero-baseline argument
+- Colour palettes that survive colour blindness
+- Annotating a chart so it needs no caption
+
+## Who Is This For?
+
+Developers and analysts who produce charts for other people to act on.`,
+      instructorId: instructor2.id,
+      categoryId: catBySlug["data-science"].id,
+      status: CourseStatus.Published,
+      coverImageUrl: "/images/course-nodejs.svg",
+      price: 4499,
+      createdAt: daysAgo(40),
+      updatedAt: daysAgo(6),
+    })
+    .returning()
+    .all();
+
+  const course4LessonIds = insertCourseContent(
+    course4.id,
+    [
+      {
+        title: "Choosing a Chart",
+        lessons: [
+          {
+            title: "Encodings and What They Say",
+            duration: 12,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Encodings\n\nPosition beats length beats angle beats area. Pick the strongest encoding the question allows.",
+          },
+          {
+            title: "Time Series Done Right",
+            duration: 14,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Time Series\n\nRanges, resampling, and why a 30-day and a 90-day view of the same data should not look identical.",
+          },
+          {
+            title: "Distributions",
+            duration: 13,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Distributions\n\nHistograms, box plots, and the mean hiding a bimodal population.",
+          },
+        ],
+      },
+      {
+        title: "Making It Readable",
+        lessons: [
+          {
+            title: "Scales and Axes",
+            duration: 11,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Scales\n\nWhen truncating an axis is honest, and when it is a lie with a legend.",
+          },
+          {
+            title: "Colour and Accessibility",
+            duration: 15,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Colour\n\nSequential, diverging and categorical palettes, checked against the three common forms of colour blindness.",
+          },
+          {
+            title: "Annotation and Narrative",
+            duration: 10,
+            content:
+              "## Annotation\n\nThe label on the spike is doing more work than the spike.",
+          },
+        ],
+      },
+    ],
+    35
+  );
+
+  console.log(
+    `Created course "${course4.title}" with 2 modules and ${course4LessonIds.length} lessons (published, no sales).`
+  );
+
+  // ─── Course 5: Shipping with Docker and Kubernetes (Marcus Johnson) ───
+  // Draft — never appears in the catalogue, and must be excluded from published
+  // course counts and revenue.
+
+  const [course5] = db
+    .insert(schema.courses)
+    .values({
+      title: "Shipping with Docker and Kubernetes",
+      slug: "shipping-with-docker-and-kubernetes",
+      description:
+        "Containerise an application and run it on Kubernetes without cargo-culting a YAML file you do not understand.",
+      salesCopy: `## From Laptop to Cluster
+
+Containers made deployment reproducible and Kubernetes made it configurable. This course covers both without pretending either is simple.
+
+### Topics
+
+- Writing a Dockerfile that builds fast and ships small
+- Pods, deployments, services — what each one is actually for
+- Config, secrets and the twelve-factor bits that matter
+- Rolling out a change and rolling it back
+
+## Status
+
+This course is still in draft while the cluster examples are rewritten against the current API.`,
+      instructorId: instructor2.id,
+      categoryId: catBySlug["devops"].id,
+      status: CourseStatus.Draft,
+      coverImageUrl: "/images/course-nodejs.svg",
+      price: 5499,
+      createdAt: daysAgo(18),
+      updatedAt: daysAgo(2),
+    })
+    .returning()
+    .all();
+
+  const course5LessonIds = insertCourseContent(
+    course5.id,
+    [
+      {
+        title: "Containers",
+        lessons: [
+          {
+            title: "Why Containers",
+            duration: 8,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Why Containers\n\nThe problem containers solve, stated precisely enough to know when you do not have it.",
+          },
+          {
+            title: "Writing a Dockerfile",
+            duration: 17,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## Dockerfiles\n\nLayer caching, multi-stage builds, and getting the image under a hundred megabytes.",
+          },
+          {
+            title: "Images and Registries",
+            duration: 12,
+            content:
+              "## Registries\n\nTagging, pushing, and why `latest` is not a version.",
+          },
+        ],
+      },
+      {
+        title: "Kubernetes Basics",
+        lessons: [
+          {
+            title: "Pods, Deployments, Services",
+            duration: 19,
+            videoUrl: "https://www.youtube.com/watch?v=lsMQRaeKNDk",
+            content:
+              "## The Core Objects\n\nThree objects explain most of Kubernetes. This lesson is those three.",
+          },
+          {
+            title: "Config and Secrets",
+            duration: 14,
+            content:
+              "## Config\n\nConfigMaps, Secrets, and keeping environment differences out of the image.",
+          },
+        ],
+      },
+    ],
+    15
+  );
+
+  console.log(
+    `Created course "${course5.title}" with 2 modules and ${course5LessonIds.length} lessons (draft).`
   );
 
   // ─── Quizzes ───
@@ -1376,7 +1775,9 @@ You've completed the Building REST APIs course. You now have the skills to build
     }
   }
 
-  console.log("Created 3 quizzes with questions and options.");
+  console.log(
+    `Created ${countRows(schema.quizzes)} quizzes with ${countRows(schema.quizQuestions)} questions and ${countRows(schema.quizOptions)} options.`
+  );
 
   // ─── Enrollments ───
   // Varied enrollment patterns:
@@ -1403,7 +1804,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     ])
     .run();
 
-  console.log("Created 7 enrollments.");
+  console.log(`Created ${countRows(schema.enrollments)} enrollments.`);
 
   // ─── Course Ratings ───
   // Star ratings from enrolled students only. Not everyone rates.
@@ -1456,7 +1857,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     ])
     .run();
 
-  console.log("Created 6 course ratings.");
+  console.log(`Created ${countRows(schema.courseRatings)} course ratings.`);
 
   // ─── Lesson Comments ───
   // Covers every state the Q&A feature can be in, so the instructor queue and
@@ -1587,7 +1988,9 @@ You've completed the Building REST APIs course. You now have the skills to build
     createdAt: daysAgo(7),
   });
 
-  console.log("Created 15 lesson comments across 9 threads.");
+  console.log(
+    `Created ${countRows(schema.comments)} lesson comments across ${countRows(schema.comments, isNull(schema.comments.parentId))} threads.`
+  );
 
   // ─── Lesson Progress ───
 
@@ -1654,7 +2057,7 @@ You've completed the Building REST APIs course. You now have the skills to build
   markComplete(students[4].id, course1LessonIds[0], 12);
   markInProgress(students[4].id, course1LessonIds[1]);
 
-  console.log("Created lesson progress records.");
+  console.log(`Created ${countRows(schema.lessonProgress)} lesson progress records.`);
 
   // ─── Quiz Attempts ───
 
@@ -1737,47 +2140,85 @@ You've completed the Building REST APIs course. You now have the skills to build
   // Sophia — failed quiz 1 (1/3 correct, hasn't retaken yet)
   recordQuizAttempt(students[4].id, quiz1.id, quiz1OptionIds, [1], 10);
 
-  console.log("Created quiz attempts and answers.");
+  console.log(
+    `Created ${countRows(schema.quizAttempts)} quiz attempts and ${countRows(schema.quizAnswers)} answers.`
+  );
 
   // ─── Video Watch Events ───
-  // Sprinkle some realistic watch events
+  //
+  // The only event types the player emits are `play`, `pause`, `ended` and
+  // `progress` — see app/components/youtube-player.tsx. `progress` is the
+  // heartbeat it posts every 10 seconds while the video is playing, so in real
+  // data it outnumbers every other type by an order of magnitude. Seed nothing
+  // the player cannot produce, and never a watch session without heartbeats.
+
+  const HEARTBEAT_INTERVAL_SECONDS = 10;
+
+  type WatchEventRow = typeof schema.videoWatchEvents.$inferInsert;
+
+  const watchEventRows: WatchEventRow[] = [];
 
   function addWatchEvent(
     userId: number,
     lessonId: number,
     eventType: string,
     positionSeconds: number,
-    eventDaysAgo: number
+    eventHoursAgo: number
   ) {
-    db.insert(schema.videoWatchEvents)
-      .values({
-        userId,
-        lessonId,
-        eventType,
-        positionSeconds,
-        createdAt: daysAgo(eventDaysAgo),
-      })
-      .run();
+    watchEventRows.push({
+      userId,
+      lessonId,
+      eventType,
+      positionSeconds,
+      createdAt: hoursAgo(eventHoursAgo),
+    });
   }
 
-  // Emma watching course 1 lesson 1 (8 min video)
-  addWatchEvent(students[0].id, course1LessonIds[0], "play", 0, 50);
-  addWatchEvent(students[0].id, course1LessonIds[0], "pause", 180, 50);
-  addWatchEvent(students[0].id, course1LessonIds[0], "play", 180, 49);
-  addWatchEvent(students[0].id, course1LessonIds[0], "ended", 480, 49);
+  // One watch session: `play`, a `progress` heartbeat every 10 seconds of
+  // playback, then `ended` if they reached the end or `pause` if they stopped
+  // short. Clock time advances with playback position, as it does in real life.
+  function addWatchSession(
+    userId: number,
+    lessonId: number,
+    fromSeconds: number,
+    toSeconds: number,
+    videoDurationSeconds: number,
+    startHoursAgo: number
+  ) {
+    // Clock time runs backwards from startHoursAgo as playback advances.
+    const hoursAgoAt = (position: number) =>
+      startHoursAgo - (position - fromSeconds) / 3600;
 
-  // James watching course 1 lesson 1
-  addWatchEvent(students[1].id, course1LessonIds[0], "play", 0, 45);
-  addWatchEvent(students[1].id, course1LessonIds[0], "ended", 480, 45);
+    addWatchEvent(userId, lessonId, "play", fromSeconds, startHoursAgo);
 
-  // Liam started watching course 2 lesson 1 but stopped mid-way
-  addWatchEvent(students[3].id, course2LessonIds[0], "play", 0, 22);
-  addWatchEvent(students[3].id, course2LessonIds[0], "pause", 300, 22);
-  addWatchEvent(students[3].id, course2LessonIds[0], "seek", 150, 21);
-  addWatchEvent(students[3].id, course2LessonIds[0], "play", 150, 21);
-  addWatchEvent(students[3].id, course2LessonIds[0], "pause", 360, 21);
+    for (
+      let pos = fromSeconds + HEARTBEAT_INTERVAL_SECONDS;
+      pos < toSeconds;
+      pos += HEARTBEAT_INTERVAL_SECONDS
+    ) {
+      addWatchEvent(userId, lessonId, "progress", pos, hoursAgoAt(pos));
+    }
 
-  console.log("Created video watch events.");
+    const reachedEnd = toSeconds >= videoDurationSeconds;
+    addWatchEvent(
+      userId,
+      lessonId,
+      reachedEnd ? "ended" : "pause",
+      toSeconds,
+      hoursAgoAt(toSeconds)
+    );
+  }
+
+  // Emma watched course 1 lesson 1 (8 min video) in two sittings.
+  addWatchSession(students[0].id, course1LessonIds[0], 0, 180, 480, 50 * 24);
+  addWatchSession(students[0].id, course1LessonIds[0], 180, 480, 480, 49 * 24);
+
+  // James watched it straight through.
+  addWatchSession(students[1].id, course1LessonIds[0], 0, 480, 480, 45 * 24);
+
+  // Liam started course 2 lesson 1 and gave up six minutes in.
+  addWatchSession(students[3].id, course2LessonIds[0], 0, 300, 600, 22 * 24);
+  addWatchSession(students[3].id, course2LessonIds[0], 300, 360, 600, 21 * 24);
 
   // ─── Purchases ───
   // Individual purchases for enrolled students
@@ -1834,7 +2275,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     })
     .run();
 
-  console.log("Created 5 individual purchases.");
+  console.log(`Created ${countRows(schema.purchases)} individual purchases.`);
 
   // ─── Teams, Team Members, and Coupons ───
   // Bossy McBossface bought 5 team seats for course 2; Olivia and Liam redeemed coupons
@@ -1890,41 +2331,451 @@ You've completed the Building REST APIs course. You now have the skills to build
     .returning()
     .all();
 
-  // Redeem 2 coupons: Olivia (students[2]) and Liam (students[3])
-  // Olivia already has an enrollment for course 2 from the enrollments section above
+  // Redeem 2 of the 5 coupons. Redeemers are named by email, not by position in
+  // the students array — position would silently re-point these redemptions at
+  // different people the moment a student is inserted rather than appended.
+  // Both already have an enrolment for course 2 from the enrolments section.
   db.update(schema.coupons)
     .set({
-      redeemedByUserId: students[2].id,
+      redeemedByUserId: studentByEmail("olivia.martinez@student.dev").id,
       redeemedAt: daysAgo(30),
     })
     .where(eq(schema.coupons.id, seededCoupons[0].id))
     .run();
 
-  // Liam already has an enrollment for course 2 from the enrollments section above
   db.update(schema.coupons)
     .set({
-      redeemedByUserId: students[3].id,
+      redeemedByUserId: studentByEmail("liam.thompson@student.dev").id,
       redeemedAt: daysAgo(25),
     })
     .where(eq(schema.coupons.id, seededCoupons[1].id))
     .run();
 
   console.log(
-    `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
+    `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (${countRows(schema.coupons, isNotNull(schema.coupons.redeemedByUserId))} redeemed, ${countRows(schema.coupons, isNull(schema.coupons.redeemedByUserId))} available).`
+  );
+
+  // ─── Generated history ───
+  //
+  // Everything above is hand-written narrative data: a handful of students whose
+  // comments, quiz attempts and ratings are written one by one. Everything below
+  // is the bulk history the analytics work is evaluated against — roughly twelve
+  // months of purchases, enrolments, progress and watch events for the cohort.
+  //
+  // Generated from a fixed PRNG seed, so every run produces the same database and
+  // a number read off the dashboard can be checked against a number computed
+  // here.
+
+  const random = makeRandom(20260731);
+
+  const lessonDurationSeconds = new Map(
+    db
+      .select({
+        id: schema.lessons.id,
+        durationMinutes: schema.lessons.durationMinutes,
+      })
+      .from(schema.lessons)
+      .all()
+      .map((l) => [l.id, (l.durationMinutes ?? 10) * 60] as const)
+  );
+
+  // ─── Drop-off cliffs ───
+  //
+  // Progress is not spread evenly through a course. Each course has two lessons
+  // where a large share of students stop for good, and the analytics work is
+  // expected to surface exactly these lessons. They are, by lesson index
+  // (0-based, in course order):
+  //
+  //   Course 1 — Introduction to TypeScript
+  //     index 8  "Generics Basics"                 — first cliff
+  //     index 13 "Mapped Types"                    — second cliff
+  //
+  //   Course 2 — Building REST APIs with Node.js
+  //     index 5  "Custom Middleware"               — first cliff
+  //     index 11 "Transactions"                    — second cliff
+  //
+  //   Course 3 — Design Systems with Tailwind
+  //     index 3  "Variants and Composition"        — first cliff
+  //     index 6  "Documentation That Gets Read"    — second cliff
+  //
+  // Assert against the lessons, not against a drop-off percentage. Each enrolment
+  // rolls: 12% never start, 38% stop at the first cliff, 22% at the second, 13%
+  // finish, and the remaining 15% stop at a uniformly random lesson — so the
+  // cliffs stand out against a noisy background rather than being the only
+  // stopping points. Those are per-enrolment odds, not the share of students who
+  // reach a given lesson: because students who stop at the first cliff never
+  // reach the second, the observed drop-off at each cliff is much steeper than
+  // its roll.
+
+  type SellableCourse = {
+    course: typeof course1;
+    lessonIds: number[];
+    // [bigCliffIndex, secondCliffIndex] — the lesson a stopping student last
+    // completed.
+    cliffs: [number, number];
+  };
+
+  const sellableCourses: SellableCourse[] = [
+    { course: course1, lessonIds: course1LessonIds, cliffs: [8, 13] },
+    { course: course2, lessonIds: course2LessonIds, cliffs: [5, 11] },
+    { course: course3, lessonIds: course3LessonIds, cliffs: [3, 6] },
+  ];
+
+  const fullPriceCountries = ["US", "GB", "DE", "CA", "AU", "NL"];
+  const pppCountries = ["IN", "BR", "PH", "NG", "ID", "VN"];
+
+  const sold = new Set<string>();
+  let generatedPurchases = 0;
+  let generatedEnrollments = 0;
+  let generatedProgressRows = 0;
+
+  // A student buys, enrols, and works through the course as far as they get.
+  // Returns false if there was nothing they could have bought on that day — a
+  // course cannot be sold before it was created, and nobody buys twice.
+  function buyCourse(
+    buyer: (typeof cohort)[number],
+    purchasedDaysAgo: number
+  ): boolean {
+    const purchasedAt = Date.parse(daysAgo(purchasedDaysAgo));
+
+    const available = sellableCourses.filter(
+      (c) =>
+        Date.parse(c.course.createdAt) <= purchasedAt &&
+        !sold.has(`${buyer.id}:${c.course.id}`)
+    );
+
+    if (available.length === 0) return false;
+
+    const target = available[Math.floor(random() * available.length)];
+    sold.add(`${buyer.id}:${target.course.id}`);
+
+    // Two in five buy at a parity-adjusted price.
+    const ppp = random() < 0.4;
+    const country = ppp
+      ? pppCountries[Math.floor(random() * pppCountries.length)]
+      : fullPriceCountries[Math.floor(random() * fullPriceCountries.length)];
+    const amountPaid = ppp
+      ? Math.round((target.course.price * 0.5) / 100) * 100
+      : target.course.price;
+
+    db.insert(schema.purchases)
+      .values({
+        userId: buyer.id,
+        courseId: target.course.id,
+        amountPaid,
+        country,
+        createdAt: daysAgo(purchasedDaysAgo),
+      })
+      .run();
+    generatedPurchases++;
+
+    db.insert(schema.enrollments)
+      .values({
+        userId: buyer.id,
+        courseId: target.course.id,
+        enrolledAt: daysAgo(purchasedDaysAgo),
+      })
+      .run();
+    generatedEnrollments++;
+
+    generatedProgressRows += generateProgress(
+      buyer.id,
+      target,
+      purchasedDaysAgo
+    );
+
+    return true;
+  }
+
+  const signupDaysAgo = (student: (typeof cohort)[number]) =>
+    Math.round((Date.now() - Date.parse(student.createdAt)) / 86_400_000);
+
+  // Purchases hang off sign-up dates, which already span the year: everyone buys
+  // something within days of joining, and about two in five come back for a
+  // second course a few months later.
+  for (const buyer of cohort) {
+    const joined = signupDaysAgo(buyer);
+
+    buyCourse(buyer, Math.max(0, joined - Math.floor(random() * 4)));
+
+    if (random() < 0.42) {
+      buyCourse(buyer, Math.max(1, joined - 90 - Math.floor(random() * 20)));
+    }
+  }
+
+  // Launch week: a burst of sales from long-standing students inside the last
+  // seven days, so the short date ranges are never empty and never identical to
+  // the long ones.
+  const launchWeekDays = [7, 6, 5, 3, 2, 1];
+  const longStanding = cohort.filter((s) => signupDaysAgo(s) > 60);
+
+  for (let i = 0; i < launchWeekDays.length; i++) {
+    buyCourse(longStanding[i % longStanding.length], launchWeekDays[i]);
+  }
+
+  // Walks a student through a course as far as they got, leaving the lesson
+  // after their last completed one in progress. Returns the number of rows
+  // written.
+  function generateProgress(
+    userId: number,
+    target: SellableCourse,
+    startedDaysAgo: number
+  ): number {
+    const { lessonIds, cliffs } = target;
+    const lastIndex = lessonIds.length - 1;
+
+    const roll = random();
+    let stopIndex: number;
+
+    if (roll < 0.12) {
+      // Bought it and never opened it.
+      return 0;
+    } else if (roll < 0.5) {
+      stopIndex = cliffs[0];
+    } else if (roll < 0.72) {
+      stopIndex = cliffs[1];
+    } else if (roll < 0.85) {
+      stopIndex = lastIndex;
+    } else {
+      stopIndex = Math.floor(random() * lessonIds.length);
+    }
+
+    // Progress is made over the days following the purchase, and never in the
+    // future.
+    const daySpan = Math.min(startedDaysAgo, 30);
+    let rows = 0;
+
+    for (let li = 0; li <= stopIndex; li++) {
+      const completedDaysAgo = Math.max(
+        0,
+        Math.round(startedDaysAgo - (daySpan * li) / lessonIds.length)
+      );
+      db.insert(schema.lessonProgress)
+        .values({
+          userId,
+          lessonId: lessonIds[li],
+          status: LessonProgressStatus.Completed,
+          completedAt: daysAgo(completedDaysAgo),
+        })
+        .run();
+      rows++;
+
+      // The lesson they stopped on is left half-watched: a session that never
+      // reached the end, heartbeats and all.
+      if (li === stopIndex) {
+        const duration = lessonDurationSeconds.get(lessonIds[li]) ?? 600;
+        addWatchSession(
+          userId,
+          lessonIds[li],
+          0,
+          duration,
+          duration,
+          completedDaysAgo * 24 + 1
+        );
+      }
+    }
+
+    if (stopIndex < lastIndex) {
+      const nextLessonId = lessonIds[stopIndex + 1];
+      db.insert(schema.lessonProgress)
+        .values({
+          userId,
+          lessonId: nextLessonId,
+          status: LessonProgressStatus.InProgress,
+        })
+        .run();
+      rows++;
+
+      const duration = lessonDurationSeconds.get(nextLessonId) ?? 600;
+      const abandonedAt = Math.round(duration * (0.1 + random() * 0.5));
+      addWatchSession(
+        userId,
+        nextLessonId,
+        0,
+        abandonedAt,
+        duration,
+        Math.max(1, Math.round(startedDaysAgo * 24 * 0.4))
+      );
+    }
+
+    return rows;
+  }
+
+  console.log(
+    `Created ${generatedPurchases} generated purchases, ${generatedEnrollments} enrolments and ${generatedProgressRows} lesson progress rows.`
+  );
+
+  // ─── Further team purchases ───
+  // Two more seat purchases so team revenue is not a single row, in mixed
+  // redemption states: one team most of the way through its seats, one that has
+  // bought and redeemed nothing yet.
+
+  function createTeamPurchase(
+    adminEmail: string,
+    course: typeof course1,
+    seats: number,
+    codePrefix: string,
+    purchasedDaysAgo: number,
+    redeemerEmails: string[]
+  ) {
+    const teamAdmin = studentByEmail(adminEmail);
+
+    const [team] = db
+      .insert(schema.teams)
+      .values({ createdAt: daysAgo(purchasedDaysAgo) })
+      .returning()
+      .all();
+
+    db.insert(schema.teamMembers)
+      .values({
+        teamId: team.id,
+        userId: teamAdmin.id,
+        role: TeamMemberRole.Admin,
+        createdAt: daysAgo(purchasedDaysAgo),
+      })
+      .run();
+
+    const [purchase] = db
+      .insert(schema.purchases)
+      .values({
+        userId: teamAdmin.id,
+        courseId: course.id,
+        amountPaid: course.price * seats,
+        country: "US",
+        createdAt: daysAgo(purchasedDaysAgo),
+      })
+      .returning()
+      .all();
+
+    const teamCoupons = db
+      .insert(schema.coupons)
+      .values(
+        Array.from({ length: seats }, (_, i) => ({
+          teamId: team.id,
+          courseId: course.id,
+          code: `${codePrefix}-${String(i + 1).padStart(2, "0")}`,
+          purchaseId: purchase.id,
+          createdAt: daysAgo(purchasedDaysAgo),
+        }))
+      )
+      .returning()
+      .all();
+
+    // Redeemers named by email, for the reason given at the first team above.
+    redeemerEmails.forEach((email, i) => {
+      const redeemer = studentByEmail(email);
+      const redeemedDaysAgo = Math.max(0, purchasedDaysAgo - (i + 1) * 2);
+
+      db.update(schema.coupons)
+        .set({
+          redeemedByUserId: redeemer.id,
+          redeemedAt: daysAgo(redeemedDaysAgo),
+        })
+        .where(eq(schema.coupons.id, teamCoupons[i].id))
+        .run();
+
+      db.insert(schema.teamMembers)
+        .values({
+          teamId: team.id,
+          userId: redeemer.id,
+          role: TeamMemberRole.Member,
+          createdAt: daysAgo(redeemedDaysAgo),
+        })
+        .run();
+
+      db.insert(schema.enrollments)
+        .values({
+          userId: redeemer.id,
+          courseId: course.id,
+          enrolledAt: daysAgo(redeemedDaysAgo),
+        })
+        .run();
+    });
+
+    return { team, purchase, coupons: teamCoupons };
+  }
+
+  // Eight seats on TypeScript, six redeemed.
+  createTeamPurchase(
+    "ava.nakamura@student.dev",
+    course1,
+    8,
+    "TEAM-TS-NAKAMURA",
+    120,
+    [
+      "noah.blackwood@student.dev",
+      "isla.fernandes@student.dev",
+      "ethan.okafor@student.dev",
+      "mia.lindqvist@student.dev",
+      "lucas.moreau@student.dev",
+      "zara.haddad@student.dev",
+    ]
+  );
+
+  // Four seats on Design Systems, bought during launch week, none redeemed yet.
+  createTeamPurchase(
+    "marta.novak@student.dev",
+    course3,
+    4,
+    "TEAM-DS-NOVAK",
+    4,
+    []
+  );
+
+  // ─── Flush watch events ───
+  // Batched: the heartbeat makes these by far the largest table, and one
+  // statement per row would dominate the seed's runtime.
+
+  const WATCH_EVENT_CHUNK = 400;
+  for (let i = 0; i < watchEventRows.length; i += WATCH_EVENT_CHUNK) {
+    db.insert(schema.videoWatchEvents)
+      .values(watchEventRows.slice(i, i + WATCH_EVENT_CHUNK))
+      .run();
+  }
+
+  console.log(`Created ${watchEventRows.length} video watch events.`);
+
+  // ─── Summary ───
+
+  const sevenDaysAgo = daysAgo(7);
+  const oldestPurchase =
+    db
+      .select({ createdAt: sql<string>`min(${schema.purchases.createdAt})` })
+      .from(schema.purchases)
+      .get()?.createdAt ?? new Date().toISOString();
+  const historyDays = Math.round(
+    (Date.now() - Date.parse(oldestPurchase)) / 86_400_000
   );
 
   console.log("\n✓ Seed complete!");
-  console.log("  Users: 9 (1 admin, 2 instructors, 6 students)");
-  console.log("  Categories: 5");
   console.log(
-    `  Courses: 2 (${course1LessonIds.length} + ${course2LessonIds.length} lessons)`
+    `  Users: ${countRows(schema.users)} (${countRows(schema.users, eq(schema.users.role, UserRole.Admin))} admin, ${countRows(schema.users, eq(schema.users.role, UserRole.Instructor))} instructors, ${countRows(schema.users, eq(schema.users.role, UserRole.Student))} students)`
   );
-  console.log("  Quizzes: 3");
-  console.log("  Enrollments: 7");
-  console.log("  Course ratings: 6");
-  console.log("  Lesson comments: 15 (4 questions awaiting an answer)");
-  console.log("  Purchases: 6 (5 individual + 1 team)");
-  console.log("  Teams: 1 (with 5 coupons)");
+  console.log(`  Categories: ${countRows(schema.categories)}`);
+  console.log(
+    `  Courses: ${countRows(schema.courses)} (${countRows(schema.courses, eq(schema.courses.status, CourseStatus.Published))} published, ${countRows(schema.courses, eq(schema.courses.status, CourseStatus.Draft))} draft)`
+  );
+  console.log(
+    `  Modules: ${countRows(schema.modules)}, lessons: ${countRows(schema.lessons)}`
+  );
+  console.log(
+    `  Quizzes: ${countRows(schema.quizzes)}, attempts: ${countRows(schema.quizAttempts)}`
+  );
+  console.log(`  Enrollments: ${countRows(schema.enrollments)}`);
+  console.log(`  Course ratings: ${countRows(schema.courseRatings)}`);
+  console.log(`  Lesson comments: ${countRows(schema.comments)}`);
+  console.log(
+    `  Lesson progress: ${countRows(schema.lessonProgress)} (${countRows(schema.lessonProgress, eq(schema.lessonProgress.status, LessonProgressStatus.Completed))} completed)`
+  );
+  console.log(
+    `  Video watch events: ${countRows(schema.videoWatchEvents)} (${countRows(schema.videoWatchEvents, eq(schema.videoWatchEvents.eventType, "progress"))} progress heartbeats)`
+  );
+  console.log(
+    `  Purchases: ${countRows(schema.purchases)} (${countRows(schema.purchases, gte(schema.purchases.createdAt, sevenDaysAgo))} in the last 7 days), spanning ${historyDays} days`
+  );
+  console.log(
+    `  Teams: ${countRows(schema.teams)}, coupons: ${countRows(schema.coupons)} (${countRows(schema.coupons, isNotNull(schema.coupons.redeemedByUserId))} redeemed)`
+  );
 }
 
 seed().catch(console.error);
