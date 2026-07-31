@@ -8,6 +8,7 @@ import {
   sql,
   desc,
   asc,
+  count,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { db } from "~/db";
@@ -276,9 +277,12 @@ export type QueuedQuestion = {
  * instructorId to span every course (admins); pass an id to scope to the
  * courses that instructor owns.
  */
-export function getUnansweredQuestions(
-  instructorId: number | null
-): QueuedQuestion[] {
+/**
+ * What makes a question unanswered, as a where-clause plus the author alias it
+ * refers to. Shared so that counting the queue and listing it can never drift
+ * apart on what counts as waiting.
+ */
+function unansweredScope(instructorId: number | null) {
   const author = alias(users, "author");
   const reply = alias(comments, "reply");
   const replyAuthor = alias(users, "reply_author");
@@ -312,6 +316,57 @@ export function getUnansweredQuestions(
     conditions.push(eq(courses.instructorId, instructorId));
   }
 
+  return { author, where: and(...conditions) };
+}
+
+export type UnansweredCounts = {
+  /** Asked on or after `since` — everything, when `since` is null. */
+  inRange: number;
+  older: number;
+};
+
+/**
+ * How many questions are waiting, split at `since` (an ISO timestamp, or null
+ * for no split at all).
+ *
+ * The two numbers come back together because the older ones matter most: a
+ * question that has gone unanswered for months is the urgent one, and a
+ * dashboard that windowed it away would hide exactly the work it exists to
+ * surface.
+ */
+export function getUnansweredCounts(
+  instructorId: number | null,
+  since: string | null
+): UnansweredCounts {
+  const { author, where } = unansweredScope(instructorId);
+
+  const row = db
+    .select({
+      inRange:
+        since === null
+          ? count(comments.id)
+          : sql<number>`sum(case when ${comments.createdAt} >= ${since} then 1 else 0 end)`,
+      total: count(comments.id),
+    })
+    .from(comments)
+    .innerJoin(author, eq(comments.userId, author.id))
+    .innerJoin(lessons, eq(comments.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(where)
+    .get();
+
+  // sum() is null over an empty set; count() is already 0.
+  const inRange = Number(row?.inRange ?? 0);
+
+  return { inRange, older: (row?.total ?? 0) - inRange };
+}
+
+export function getUnansweredQuestions(
+  instructorId: number | null
+): QueuedQuestion[] {
+  const { author, where } = unansweredScope(instructorId);
+
   return db
     .select({
       id: comments.id,
@@ -330,7 +385,7 @@ export function getUnansweredQuestions(
     .innerJoin(lessons, eq(comments.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
     .innerJoin(courses, eq(modules.courseId, courses.id))
-    .where(and(...conditions))
+    .where(where)
     .orderBy(desc(comments.createdAt), desc(comments.id))
     .all();
 }
