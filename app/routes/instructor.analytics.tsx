@@ -4,6 +4,8 @@ import type { Route } from "./+types/instructor.analytics";
 import { requireInstructorOrAdmin } from "~/lib/access.server";
 import {
   getAudienceSummary,
+  getCourseDropOff,
+  getCourseProgressSummary,
   getRatingSummary,
   getRevenueByCourse,
   getRevenueOverTime,
@@ -11,6 +13,10 @@ import {
   getTopBuyers,
   hasPublishedCourses,
   listCourseOwners,
+  listInstructorCourses,
+  type CourseFunnel,
+  type CourseProgressSummary,
+  type FunnelLesson,
   type RevenueSeries,
 } from "~/services/analyticsService";
 import { getUnansweredCounts } from "~/services/commentService";
@@ -80,13 +86,24 @@ export async function loader({ request, url }: Route.LoaderArgs) {
   const range = parseAnalyticsRange(url.searchParams.get("range"));
   const tab: AnalyticsTab =
     url.searchParams.get("tab") === "course" ? "course" : "overview";
-  const selectedCourseId = parseId(url.searchParams.get("course"));
 
   // Instructors are pinned to their own figures; only an admin may look
   // elsewhere, and null means "every instructor".
   const instructorId = isAdmin
     ? parseId(url.searchParams.get("instructor"))
     : userId;
+
+  // The selector lists every course the viewer owns rather than only the ones
+  // that sold: a course nobody is finishing is exactly what this tab is for.
+  const courseOptions = listInstructorCourses(instructorId);
+  const requestedCourseId = parseId(url.searchParams.get("course"));
+  // Checked against the list rather than trusted: the id arrives in the URL,
+  // and an instructor may not read another instructor's funnel.
+  const selectedCourseId = courseOptions.some(
+    (course) => course.courseId === requestedCourseId
+  )
+    ? requestedCourseId
+    : null;
 
   return {
     // Split rather than filtered: the range applies, but questions older than
@@ -103,6 +120,15 @@ export async function loader({ request, url }: Route.LoaderArgs) {
     summary: getRevenueSummary(instructorId, range),
     series: getRevenueOverTime(instructorId, range),
     courses: getRevenueByCourse(instructorId, range),
+    courseOptions,
+    // Progress and drop-off carry no usable timestamp, so they span all time
+    // whatever the range control says — and the tab says so on screen.
+    progress:
+      selectedCourseId === null
+        ? null
+        : getCourseProgressSummary(selectedCourseId),
+    funnel:
+      selectedCourseId === null ? null : getCourseDropOff(selectedCourseId),
     instructors: isAdmin ? listCourseOwners() : [],
     // The platform-wide view always has courses in it, so the "publish
     // something" prompt only makes sense for one named instructor.
@@ -311,6 +337,137 @@ function RevenueChart({ series }: { series: RevenueSeries }) {
   );
 }
 
+/** The two completion figures, side by side and deliberately not merged. */
+function CourseProgress({ progress }: { progress: CourseProgressSummary }) {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <Card>
+        <CardContent className="p-6">
+          <div className="text-sm font-medium text-muted-foreground">
+            Average progress <span className="font-normal">· all time</span>
+          </div>
+          <div className="mt-2 text-3xl font-bold">
+            {progress.averageProgressPercent === null
+              ? "—"
+              : `${progress.averageProgressPercent}%`}
+          </div>
+          <div className="mt-3 h-2 w-full rounded-full bg-muted">
+            <div
+              className="h-2 rounded-full bg-primary transition-all"
+              style={{ width: `${progress.averageProgressPercent ?? 0}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Lessons completed per enrolled student, across{" "}
+            {progress.enrolledCount}{" "}
+            {progress.enrolledCount === 1 ? "student" : "students"} and{" "}
+            {progress.totalLessons}{" "}
+            {progress.totalLessons === 1 ? "lesson" : "lessons"}.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-6">
+          <div className="text-sm font-medium text-muted-foreground">
+            Students finished <span className="font-normal">· all time</span>
+          </div>
+          <div className="mt-2 text-3xl font-bold">
+            {progress.finishedCount}
+          </div>
+          {/* A count, and deliberately not a third percentage: several
+              defensible completion rates exist, they disagree, and naming one
+              of them here would be wrong for whoever is reading. */}
+          <p className="mt-2 text-xs text-muted-foreground">
+            Students who have completed every lesson, of{" "}
+            {progress.enrolledCount} enrolled.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** One lesson's bar, sized against the enrolled count. */
+function FunnelRow({
+  lesson,
+  enrolledCount,
+}: {
+  lesson: FunnelLesson;
+  enrolledCount: number;
+}) {
+  const share =
+    enrolledCount === 0 ? 0 : (lesson.reachedCount / enrolledCount) * 100;
+
+  return (
+    <div className="flex items-center gap-3 py-1.5 text-sm">
+      <div
+        className="w-48 shrink-0 truncate text-muted-foreground"
+        title={lesson.title}
+      >
+        {lesson.title}
+      </div>
+      <div className="h-4 flex-1 rounded bg-muted">
+        <div
+          className="h-4 rounded bg-primary/70 transition-all"
+          style={{ width: `${share}%` }}
+        />
+      </div>
+      <div className="w-10 shrink-0 text-right font-medium tabular-nums">
+        {lesson.reachedCount}
+      </div>
+      {/* The drop is spelled out beside each bar so the worst lesson can be
+          found by reading rather than by comparing bar lengths by eye. */}
+      <div className="w-16 shrink-0 text-right text-xs tabular-nums">
+        {lesson.dropFromPrevious > 0 ? (
+          <span className="font-medium text-destructive">
+            −{lesson.dropFromPrevious}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DropOffFunnel({ funnel }: { funnel: CourseFunnel }) {
+  if (funnel.modules.length === 0) {
+    return (
+      <p className="py-12 text-center text-sm text-muted-foreground">
+        This course has no lessons yet, so there is nothing to drop off from.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {funnel.modules.map((module) => (
+        <div key={module.moduleId}>
+          {/* Grouped by module because that is how instructors talk about a
+              course — "nobody survives module 3". */}
+          <div className="flex items-baseline justify-between gap-4 border-b pb-1">
+            <h3 className="text-sm font-semibold">{module.title}</h3>
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {module.reachedCount} of {funnel.enrolledCount} reached
+              {module.dropWithin > 0 && `, ${module.dropWithin} lost inside`}
+            </p>
+          </div>
+          <div className="mt-2">
+            {module.lessons.map((lesson) => (
+              <FunnelRow
+                key={lesson.lessonId}
+                lesson={lesson}
+                enrolledCount={funnel.enrolledCount}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function InstructorAnalytics({
   loaderData,
 }: Route.ComponentProps) {
@@ -323,6 +480,9 @@ export default function InstructorAnalytics({
     summary,
     series,
     courses,
+    courseOptions,
+    progress,
+    funnel,
     instructors,
     unpublished,
     audience,
@@ -345,7 +505,13 @@ export default function InstructorAnalytics({
   }
 
   const selectedCourse =
-    courses.find((course) => course.courseId === selectedCourseId) ?? null;
+    courseOptions.find((course) => course.courseId === selectedCourseId) ??
+    null;
+  // The revenue table narrows to the selected course. One with no sales in the
+  // range has no row at all, and the panel says so rather than sitting empty.
+  const revenueRows = selectedCourse
+    ? courses.filter((course) => course.courseId === selectedCourseId)
+    : courses;
 
   return (
     <div className="mx-auto max-w-5xl p-6 lg:p-8">
@@ -553,7 +719,7 @@ export default function InstructorAnalytics({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All courses</SelectItem>
-                {courses.map((course) => (
+                {courseOptions.map((course) => (
                   <SelectItem
                     key={course.courseId}
                     value={String(course.courseId)}
@@ -564,9 +730,53 @@ export default function InstructorAnalytics({
               </SelectContent>
             </Select>
 
+            {progress && funnel ? (
+              progress.enrolledCount === 0 ? (
+                <Card>
+                  <CardContent className="py-12 text-center">
+                    <p className="font-medium">Nobody is enrolled yet</p>
+                    <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                      Progress and drop-off appear as soon as the first student
+                      joins {selectedCourse?.title}.
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : (
+                <>
+                  <CourseProgress progress={progress} />
+
+                  <Card>
+                    <CardContent className="p-6">
+                      <h2 className="text-lg font-semibold">Drop-off</h2>
+                      <p className="mb-4 text-sm text-muted-foreground">
+                        How many of the {funnel.enrolledCount} enrolled{" "}
+                        {funnel.enrolledCount === 1 ? "student" : "students"}{" "}
+                        got at least as far as each lesson, all time. The bars
+                        only descend, so the biggest gap is where students quit
+                        — the figure beside a lesson counts the ones who never
+                        reached it, having stopped on the lesson above.
+                      </p>
+                      <DropOffFunnel funnel={funnel} />
+                    </CardContent>
+                  </Card>
+                </>
+              )
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <p className="font-medium">Pick a course</p>
+                  <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                    {courseOptions.length === 0
+                      ? "There are no courses here to look into yet."
+                      : "Choose one of your courses above to see how far students get and where they give up."}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardContent className="p-6">
-                {courses.length === 0 ? (
+                {revenueRows.length === 0 ? (
                   <p className="py-12 text-center text-sm text-muted-foreground">
                     No sales in this period yet.
                   </p>
@@ -584,25 +794,23 @@ export default function InstructorAnalytics({
                       </tr>
                     </thead>
                     <tbody>
-                      {(selectedCourse ? [selectedCourse] : courses).map(
-                        (course) => (
-                          <tr key={course.courseId} className="border-b">
-                            <td className="py-3 font-medium">{course.title}</td>
-                            <td className="py-3 text-right tabular-nums">
-                              {course.purchaseCount}
-                            </td>
-                            <td className="py-3 text-right tabular-nums">
-                              {formatMoney(course.grossCents)}
-                            </td>
-                            <td className="py-3 text-right tabular-nums text-muted-foreground">
-                              {formatMoney(course.feeCents)}
-                            </td>
-                            <td className="py-3 text-right font-medium tabular-nums">
-                              {formatMoney(course.netCents)}
-                            </td>
-                          </tr>
-                        )
-                      )}
+                      {revenueRows.map((course) => (
+                        <tr key={course.courseId} className="border-b">
+                          <td className="py-3 font-medium">{course.title}</td>
+                          <td className="py-3 text-right tabular-nums">
+                            {course.purchaseCount}
+                          </td>
+                          <td className="py-3 text-right tabular-nums">
+                            {formatMoney(course.grossCents)}
+                          </td>
+                          <td className="py-3 text-right tabular-nums text-muted-foreground">
+                            {formatMoney(course.feeCents)}
+                          </td>
+                          <td className="py-3 text-right font-medium tabular-nums">
+                            {formatMoney(course.netCents)}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 )}

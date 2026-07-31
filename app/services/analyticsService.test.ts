@@ -19,9 +19,13 @@ import {
   getRevenueOverTime,
   getRevenueSummary,
   getStudentRevenue,
+  getCourseDropOff,
+  getCourseProgressSummary,
   getTopBuyers,
   hasPublishedCourses,
   listCourseOwners,
+  listInstructorCourses,
+  type CourseFunnel,
   type RevenuePoint,
 } from "./analyticsService";
 
@@ -205,6 +209,90 @@ function rate(
     .insert(schema.courseRatings)
     .values({ userId, courseId, rating, createdAt: at, updatedAt: at })
     .run();
+}
+
+/**
+ * Modules and lessons for a course, given a lesson count per module.
+ *
+ * Returns the modules in course order, each with its lessons in position
+ * order, so a test can name a lesson by where it sits in the course.
+ */
+function seedCurriculum(courseId: number, lessonsPerModule: number[]) {
+  return lessonsPerModule.map((lessonCount, moduleIndex) => {
+    const moduleRow = testDb
+      .insert(schema.modules)
+      .values({
+        courseId,
+        title: `Module ${moduleIndex + 1}`,
+        position: moduleIndex,
+      })
+      .returning()
+      .get();
+
+    const lessonRows = testDb
+      .insert(schema.lessons)
+      .values(
+        Array.from({ length: lessonCount }, (_, lessonIndex) => ({
+          moduleId: moduleRow.id,
+          title: `Module ${moduleIndex + 1} lesson ${lessonIndex + 1}`,
+          position: lessonIndex,
+        }))
+      )
+      .returning()
+      .all();
+
+    return { module: moduleRow, lessons: lessonRows };
+  });
+}
+
+/** Every lesson of a seeded curriculum, in course order. */
+function lessonIdsOf(curriculum: ReturnType<typeof seedCurriculum>): number[] {
+  return curriculum.flatMap((entry) =>
+    entry.lessons.map((lesson) => lesson.id)
+  );
+}
+
+function completeLesson(userId: number, lessonId: number, at = daysAgo(1)) {
+  testDb
+    .insert(schema.lessonProgress)
+    .values({
+      userId,
+      lessonId,
+      status: schema.LessonProgressStatus.Completed,
+      completedAt: at,
+    })
+    .run();
+}
+
+function startLesson(userId: number, lessonId: number) {
+  testDb
+    .insert(schema.lessonProgress)
+    .values({
+      userId,
+      lessonId,
+      status: schema.LessonProgressStatus.InProgress,
+    })
+    .run();
+}
+
+/** A student who enrolled and completed the first `count` lessons in order. */
+function studentWhoStoppedAfter(
+  name: string,
+  courseId: number,
+  lessonIds: number[],
+  count: number
+) {
+  const student = seedStudent(name);
+  enrol(student.id, courseId);
+  for (const lessonId of lessonIds.slice(0, count)) {
+    completeLesson(student.id, lessonId);
+  }
+  return student;
+}
+
+/** The funnel's lessons, flattened back into course order. */
+function funnelLessons(funnel: CourseFunnel) {
+  return funnel.modules.flatMap((module) => module.lessons);
 }
 
 describe("analyticsService", () => {
@@ -877,6 +965,325 @@ describe("analyticsService", () => {
         average: null,
         count: 0,
       });
+    });
+  });
+
+  describe("getCourseProgressSummary", () => {
+    it("averages progress over enrolled students, counting lessons", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [4]));
+
+      // 100%, 25% and 0% — an average of 41.66…, which is 42 rounded.
+      studentWhoStoppedAfter("Finisher", base.course.id, lessonIds, 4);
+      studentWhoStoppedAfter("Dabbler", base.course.id, lessonIds, 1);
+      studentWhoStoppedAfter("Absentee", base.course.id, lessonIds, 0);
+
+      const summary = getCourseProgressSummary(base.course.id);
+
+      expect(summary.enrolledCount).toBe(3);
+      expect(summary.totalLessons).toBe(4);
+      expect(summary.averageProgressPercent).toBe(42);
+    });
+
+    it("counts finished students separately from average progress", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [2, 2]));
+
+      // Healthy average, but only one of the four is actually done: the two
+      // figures disagree, which is exactly why both are shown.
+      studentWhoStoppedAfter("Finisher", base.course.id, lessonIds, 4);
+      studentWhoStoppedAfter("Nearly", base.course.id, lessonIds, 3);
+      studentWhoStoppedAfter("Halfway", base.course.id, lessonIds, 2);
+      studentWhoStoppedAfter("Started", base.course.id, lessonIds, 1);
+
+      const summary = getCourseProgressSummary(base.course.id);
+
+      expect(summary.averageProgressPercent).toBe(63);
+      expect(summary.finishedCount).toBe(1);
+    });
+
+    it("does not count an in-progress lesson as completed", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [2]));
+      const student = studentWhoStoppedAfter(
+        "Watcher",
+        base.course.id,
+        lessonIds,
+        1
+      );
+      startLesson(student.id, lessonIds[1]);
+
+      expect(getCourseProgressSummary(base.course.id)).toMatchObject({
+        averageProgressPercent: 50,
+        finishedCount: 0,
+      });
+    });
+
+    it("ignores progress made by someone who is not enrolled", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [2]));
+      studentWhoStoppedAfter("Enrolled", base.course.id, lessonIds, 1);
+
+      const gatecrasher = seedStudent("Gatecrasher");
+      completeLesson(gatecrasher.id, lessonIds[0]);
+      completeLesson(gatecrasher.id, lessonIds[1]);
+
+      expect(getCourseProgressSummary(base.course.id)).toMatchObject({
+        enrolledCount: 1,
+        averageProgressPercent: 50,
+      });
+    });
+
+    it("has no average at all for a course nobody has enrolled in", () => {
+      seedCurriculum(base.course.id, [3]);
+
+      expect(getCourseProgressSummary(base.course.id)).toEqual({
+        enrolledCount: 0,
+        totalLessons: 3,
+        averageProgressPercent: null,
+        finishedCount: 0,
+      });
+    });
+
+    it("returns null rather than dividing by an empty curriculum", () => {
+      enrol(base.user.id, base.course.id);
+
+      expect(getCourseProgressSummary(base.course.id)).toEqual({
+        enrolledCount: 1,
+        totalLessons: 0,
+        averageProgressPercent: null,
+        finishedCount: 0,
+      });
+    });
+  });
+
+  describe("getCourseDropOff", () => {
+    it("counts, at each lesson, the students who got at least that far", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [4]));
+
+      studentWhoStoppedAfter("Finisher", base.course.id, lessonIds, 4);
+      studentWhoStoppedAfter("Quitter", base.course.id, lessonIds, 2);
+      studentWhoStoppedAfter("Tourist", base.course.id, lessonIds, 1);
+
+      const funnel = getCourseDropOff(base.course.id);
+
+      expect(funnel.enrolledCount).toBe(3);
+      expect(
+        funnelLessons(funnel).map((lesson) => lesson.reachedCount)
+      ).toEqual([3, 2, 1, 1]);
+    });
+
+    it("never rises, even when students skip lessons at random", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [3, 3]));
+
+      // A messy cohort: skipped lessons, an unfinished last lesson, a student
+      // who never opened anything.
+      const skipper = seedStudent("Skipper");
+      enrol(skipper.id, base.course.id);
+      completeLesson(skipper.id, lessonIds[0]);
+      completeLesson(skipper.id, lessonIds[4]);
+      startLesson(skipper.id, lessonIds[5]);
+      studentWhoStoppedAfter("Steady", base.course.id, lessonIds, 4);
+      studentWhoStoppedAfter("Browser", base.course.id, lessonIds, 1);
+      studentWhoStoppedAfter("Absentee", base.course.id, lessonIds, 0);
+
+      const counts = funnelLessons(getCourseDropOff(base.course.id)).map(
+        (lesson) => lesson.reachedCount
+      );
+
+      for (let i = 1; i < counts.length; i++) {
+        expect(counts[i]).toBeLessThanOrEqual(counts[i - 1]);
+      }
+    });
+
+    it("does not read a skipped lesson as a drop", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [4]));
+
+      // Skipped the second lesson and carried on to the end: still present at
+      // every bar, because the alternative would send an instructor chasing a
+      // problem that isn't there.
+      const student = seedStudent("Skipper");
+      enrol(student.id, base.course.id);
+      completeLesson(student.id, lessonIds[0]);
+      completeLesson(student.id, lessonIds[2]);
+      completeLesson(student.id, lessonIds[3]);
+
+      const lessonBars = funnelLessons(getCourseDropOff(base.course.id));
+
+      expect(lessonBars.map((lesson) => lesson.reachedCount)).toEqual([
+        1, 1, 1, 1,
+      ]);
+      expect(lessonBars.map((lesson) => lesson.dropFromPrevious)).toEqual([
+        0, 0, 0, 0,
+      ]);
+    });
+
+    it("counts a lesson in progress as reached", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [3]));
+      const student = studentWhoStoppedAfter(
+        "Watcher",
+        base.course.id,
+        lessonIds,
+        1
+      );
+      startLesson(student.id, lessonIds[1]);
+
+      expect(
+        funnelLessons(getCourseDropOff(base.course.id)).map(
+          (lesson) => lesson.reachedCount
+        )
+      ).toEqual([1, 1, 0]);
+    });
+
+    it("reports the drop into each lesson, starting from the enrolled count", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [3]));
+
+      studentWhoStoppedAfter("Finisher", base.course.id, lessonIds, 3);
+      studentWhoStoppedAfter("Quitter", base.course.id, lessonIds, 1);
+      // Enrolled and never opened it: a drop before the first lesson.
+      studentWhoStoppedAfter("Absentee", base.course.id, lessonIds, 0);
+
+      expect(
+        funnelLessons(getCourseDropOff(base.course.id)).map(
+          (lesson) => lesson.dropFromPrevious
+        )
+      ).toEqual([1, 1, 0]);
+    });
+
+    it("groups lessons under their modules, with a subtotal each", () => {
+      const curriculum = seedCurriculum(base.course.id, [2, 2]);
+      const lessonIds = lessonIdsOf(curriculum);
+
+      studentWhoStoppedAfter("Finisher", base.course.id, lessonIds, 4);
+      studentWhoStoppedAfter("Half", base.course.id, lessonIds, 2);
+      studentWhoStoppedAfter("Starter", base.course.id, lessonIds, 1);
+
+      const funnel = getCourseDropOff(base.course.id);
+
+      expect(funnel.modules.map((module) => module.title)).toEqual([
+        "Module 1",
+        "Module 2",
+      ]);
+      expect(funnel.modules[0].moduleId).toBe(curriculum[0].module.id);
+      // Students who reached the module at all, and how many it lost.
+      expect(funnel.modules[0]).toMatchObject({
+        reachedCount: 3,
+        dropWithin: 1,
+      });
+      expect(funnel.modules[1]).toMatchObject({
+        reachedCount: 1,
+        dropWithin: 0,
+      });
+      expect(
+        funnel.modules[1].lessons.map((lesson) => lesson.lessonId)
+      ).toEqual([lessonIds[2], lessonIds[3]]);
+    });
+
+    it("finds both cliffs a cohort was deliberately made to quit at", () => {
+      // The shape the seed plants (scripts/seed.ts): two cliffs per course,
+      // some students who buy and never open it, some who finish, and a
+      // scattering of ordinary stopping points in between. As in the seed, a
+      // stopping student leaves the lesson after their last completed one
+      // half-watched — which counts as reached, so each cliff shows up as the
+      // drop into the lesson *after* the one they abandoned.
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [4, 4, 4]));
+      const [firstCliff, secondCliff] = [3, 7];
+
+      function stopsAt(name: string, lastCompleted: number) {
+        const student = studentWhoStoppedAfter(
+          name,
+          base.course.id,
+          lessonIds,
+          lastCompleted + 1
+        );
+        startLesson(student.id, lessonIds[lastCompleted + 1]);
+      }
+
+      for (let i = 0; i < 8; i++) stopsAt(`First cliff ${i}`, firstCliff);
+      for (let i = 0; i < 5; i++) stopsAt(`Second cliff ${i}`, secondCliff);
+      for (let i = 0; i < 2; i++) {
+        studentWhoStoppedAfter(
+          `Never opened ${i}`,
+          base.course.id,
+          lessonIds,
+          0
+        );
+      }
+      for (let i = 0; i < 3; i++) {
+        studentWhoStoppedAfter(`Finisher ${i}`, base.course.id, lessonIds, 12);
+      }
+      stopsAt("Wanderer", 1);
+
+      const lessonBars = funnelLessons(getCourseDropOff(base.course.id));
+      const steepest = [...lessonBars]
+        .sort((a, b) => b.dropFromPrevious - a.dropFromPrevious)
+        .slice(0, 2);
+
+      // The second cliff is found as well as the first, even though the first
+      // has already thinned the cohort that reaches it.
+      expect(steepest.map((lesson) => lesson.lessonId)).toEqual([
+        lessonIds[firstCliff + 2],
+        lessonIds[secondCliff + 2],
+      ]);
+      expect(steepest.map((lesson) => lesson.dropFromPrevious)).toEqual([8, 5]);
+      // And the two who bought it and never opened it are lost at the first bar.
+      expect(lessonBars[0].dropFromPrevious).toBe(2);
+    });
+
+    it("ignores students enrolled in somebody else's course", () => {
+      const lessonIds = lessonIdsOf(seedCurriculum(base.course.id, [2]));
+      const second = seedSecondCourse();
+      const otherLessons = lessonIdsOf(seedCurriculum(second.id, [2]));
+
+      studentWhoStoppedAfter("Ours", base.course.id, lessonIds, 1);
+      studentWhoStoppedAfter("Theirs", second.id, otherLessons, 2);
+
+      const funnel = getCourseDropOff(base.course.id);
+
+      expect(funnel.enrolledCount).toBe(1);
+      expect(
+        funnelLessons(funnel).map((lesson) => lesson.reachedCount)
+      ).toEqual([1, 0]);
+    });
+
+    it("reports zeroes for a course nobody has enrolled in", () => {
+      seedCurriculum(base.course.id, [2]);
+
+      const funnel = getCourseDropOff(base.course.id);
+
+      expect(funnel.enrolledCount).toBe(0);
+      expect(
+        funnelLessons(funnel).map((lesson) => lesson.reachedCount)
+      ).toEqual([0, 0]);
+    });
+
+    it("has no modules at all for a course with no curriculum", () => {
+      expect(getCourseDropOff(base.course.id).modules).toEqual([]);
+    });
+  });
+
+  describe("listInstructorCourses", () => {
+    it("lists the instructor's courses for the selector", () => {
+      const second = seedSecondCourse();
+
+      expect(listInstructorCourses(base.instructor.id)).toEqual([
+        { courseId: second.id, title: "Second Course" },
+        { courseId: base.course.id, title: "Test Course" },
+      ]);
+    });
+
+    it("leaves out another instructor's courses", () => {
+      const rival = seedRivalInstructor();
+
+      expect(
+        listInstructorCourses(base.instructor.id).map(
+          (course) => course.courseId
+        )
+      ).not.toContain(rival.course.id);
+    });
+
+    it("spans every course when given a null instructor", () => {
+      const rival = seedRivalInstructor();
+
+      expect(
+        listInstructorCourses(null).map((course) => course.courseId)
+      ).toContain(rival.course.id);
     });
   });
 });
