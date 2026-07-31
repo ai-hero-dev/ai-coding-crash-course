@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
+import { eq } from "drizzle-orm";
 
 let testDb: ReturnType<typeof createTestDb>;
 let base: ReturnType<typeof seedBaseData>;
@@ -21,6 +22,7 @@ import {
   getLessonThread,
   getCommentCountForLesson,
   getUnansweredQuestions,
+  getUnansweredCounts,
   getCourseForLesson,
 } from "./commentService";
 
@@ -84,7 +86,9 @@ describe("commentService", () => {
 
     it("accepts a body of exactly 5000 characters", () => {
       const body = "a".repeat(5000);
-      expect(createComment(base.user.id, lesson.id, null, body).body).toBe(body);
+      expect(createComment(base.user.id, lesson.id, null, body).body).toBe(
+        body
+      );
     });
 
     it("throws when the lesson does not exist", () => {
@@ -450,9 +454,9 @@ describe("commentService", () => {
       createComment(base.user.id, lesson.id, null, "Mine");
       createComment(base.user.id, otherLesson.id, null, "Theirs");
 
-      expect(getUnansweredQuestions(base.instructor.id).map((q) => q.body)).toEqual(
-        ["Mine"]
-      );
+      expect(
+        getUnansweredQuestions(base.instructor.id).map((q) => q.body)
+      ).toEqual(["Mine"]);
       expect(
         getUnansweredQuestions(otherInstructor.id).map((q) => q.body)
       ).toEqual(["Theirs"]);
@@ -489,9 +493,94 @@ describe("commentService", () => {
       createComment(base.user.id, lesson.id, null, "Older");
       createComment(base.user.id, lesson.id, null, "Newer");
 
-      expect(getUnansweredQuestions(base.instructor.id).map((q) => q.body)).toEqual(
-        ["Newer", "Older"]
+      expect(
+        getUnansweredQuestions(base.instructor.id).map((q) => q.body)
+      ).toEqual(["Newer", "Older"]);
+    });
+  });
+
+  describe("getUnansweredCounts", () => {
+    /** Moves a question back in time — createComment always stamps it now. */
+    function backdate(commentId: number, createdAt: string) {
+      testDb
+        .update(schema.comments)
+        .set({ createdAt })
+        .where(eq(schema.comments.id, commentId))
+        .run();
+    }
+
+    const LAST_WEEK = "2026-06-08T12:00:00.000Z";
+
+    it("counts every waiting question when nothing splits them", () => {
+      createComment(base.user.id, lesson.id, null, "How?");
+      createComment(base.user.id, lesson.id, null, "Why?");
+
+      expect(getUnansweredCounts(base.instructor.id, null)).toEqual({
+        inRange: 2,
+        older: 0,
+      });
+    });
+
+    it("splits the queue at the given timestamp", () => {
+      const stale = createComment(base.user.id, lesson.id, null, "Ancient");
+      backdate(stale.id, "2020-01-01T00:00:00.000Z");
+      createComment(base.user.id, lesson.id, null, "Fresh");
+
+      expect(getUnansweredCounts(base.instructor.id, LAST_WEEK)).toEqual({
+        inRange: 1,
+        older: 1,
+      });
+    });
+
+    it("agrees with the queue it summarises", () => {
+      createComment(base.user.id, lesson.id, null, "How?");
+      const answered = createComment(base.user.id, lesson.id, null, "Answered");
+      createComment(base.instructor.id, lesson.id, answered.id, "Like this");
+
+      const counts = getUnansweredCounts(base.instructor.id, null);
+
+      expect(counts.inRange + counts.older).toBe(
+        getUnansweredQuestions(base.instructor.id).length
       );
+    });
+
+    it("counts zero rather than NaN with an empty queue", () => {
+      expect(getUnansweredCounts(base.instructor.id, LAST_WEEK)).toEqual({
+        inRange: 0,
+        older: 0,
+      });
+    });
+
+    it("scopes to the courses an instructor owns", () => {
+      const otherInstructor = createUser(
+        "Other Instructor",
+        "other-instructor@example.com",
+        schema.UserRole.Instructor
+      );
+      const otherCourse = testDb
+        .insert(schema.courses)
+        .values({
+          title: "Other Course",
+          slug: "other-course",
+          description: "Another",
+          salesCopy: "Sales copy.",
+          instructorId: otherInstructor.id,
+          categoryId: base.category.id,
+          status: schema.CourseStatus.Published,
+        })
+        .returning()
+        .get();
+
+      createComment(base.user.id, lesson.id, null, "Mine");
+      createComment(
+        base.user.id,
+        createLesson(otherCourse.id, "Other Lesson").id,
+        null,
+        "Theirs"
+      );
+
+      expect(getUnansweredCounts(base.instructor.id, null).inRange).toBe(1);
+      expect(getUnansweredCounts(null, null).inRange).toBe(2);
     });
   });
 
