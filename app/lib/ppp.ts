@@ -75,6 +75,17 @@ export function checkPppAccess(
   return result;
 }
 
+/**
+ * A country code as a name, falling back to the code itself.
+ *
+ * A purchase can carry a code this list has never heard of — the code is
+ * recorded at purchase time and the list is hardcoded here — and showing the
+ * raw code beats showing nothing.
+ */
+export function countryName(code: string): string {
+  return COUNTRIES.find((country) => country.code === code)?.name ?? code;
+}
+
 // All countries with their names, for the dev UI dropdown
 export const COUNTRIES: { code: string; name: string }[] = [
   { code: "AR", name: "Argentina" },
