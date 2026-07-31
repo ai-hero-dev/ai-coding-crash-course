@@ -33,6 +33,24 @@ export function parseAnalyticsRange(value: string | null): AnalyticsRange {
     : DEFAULT_ANALYTICS_RANGE;
 }
 
+const RANGE_DAYS: Record<Exclude<AnalyticsRange, "all">, number> = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+};
+
+/**
+ * The inclusive start of a range, as an ISO timestamp, or null for all time.
+ *
+ * The boundary is decided in exactly one place: a row landing exactly on the
+ * cutoff is inside the range. Lives here rather than in the service because
+ * panels built on other services have to agree with it.
+ */
+export function rangeStart(range: AnalyticsRange): string | null {
+  if (range === "all") return null;
+  return new Date(Date.now() - RANGE_DAYS[range] * 86_400_000).toISOString();
+}
+
 const MONTHS = [
   "Jan",
   "Feb",
