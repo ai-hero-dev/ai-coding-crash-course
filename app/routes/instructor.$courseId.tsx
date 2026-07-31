@@ -159,7 +159,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const students = enrolledStudents.map((enrollment) => {
     const studentUser = getUserById(enrollment.userId);
-    const progress = calculateProgress(enrollment.userId, courseId, false, false);
+    const progress = calculateProgress(enrollment.userId, courseId, false);
 
     const quizScores = lessonQuizzes.map((lq) => {
       const bestAttempt = getBestAttempt(enrollment.userId, lq.quizId);

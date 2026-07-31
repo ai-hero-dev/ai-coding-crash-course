@@ -51,7 +51,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const enrollments = getUserEnrolledCourses(currentUserId);
     for (const enrollment of enrollments) {
       progressMap.set(enrollment.courseId, {
-        progress: calculateProgress(currentUserId, enrollment.courseId, false, false),
+        progress: calculateProgress(currentUserId, enrollment.courseId, false),
         completedLessons: getCompletedLessonCount(currentUserId, enrollment.courseId),
       });
     }
