@@ -23,9 +23,12 @@ import {
   lessons,
   modules,
   purchases,
+  quizAttempts,
+  quizzes,
   users,
 } from "~/db/schema";
 import { rangeStart, splitRevenue, type AnalyticsRange } from "~/lib/analytics";
+import { getDiscountForCountry } from "~/lib/ppp";
 
 // ─── Analytics Service ───
 // Every figure on the instructor analytics page. Aggregates are grouped queries
@@ -87,6 +90,17 @@ function scopeOn(
 /** The common case: figures counted from when the money changed hands. */
 function purchaseScope(instructorId: number | null, range: AnalyticsRange) {
   return scopeOn(purchases.createdAt, instructorId, range);
+}
+
+/**
+ * The range on its own, for figures already narrowed to one course.
+ *
+ * The course-detail panels are scoped by the course they were given rather
+ * than by who owns it, so they need the range without the instructor join.
+ */
+function since(dateColumn: SQLiteColumn, range: AnalyticsRange) {
+  const start = rangeStart(range);
+  return start === null ? undefined : gte(dateColumn, start);
 }
 
 /** The instructor filter on its own, for figures no range applies to. */
@@ -782,6 +796,238 @@ export function getCourseDropOff(courseId: number): CourseFunnel {
   });
 
   return { enrolledCount, modules: grouped };
+}
+
+export type QuizPassRate = {
+  quizId: number;
+  title: string;
+  moduleTitle: string;
+  lessonTitle: string;
+  /** The threshold as a percentage, for stating it beside the rate. */
+  passingScorePercent: number;
+  /** Students with at least one attempt in the range. */
+  studentCount: number;
+  passedCount: number;
+  /** 0–100, or null when nobody has attempted it. */
+  passRatePercent: number | null;
+  averageBestScorePercent: number | null;
+};
+
+/**
+ * How each quiz in a course is going, one row per quiz in course order.
+ *
+ * Counted per student on their best attempt, not per attempt: retakes are
+ * allowed and encouraged, so counting attempts would score a quiz by how many
+ * goes people needed rather than by whether they got there — and the student
+ * roster already reports best attempts, so a second definition here would put
+ * two different numbers for the same student on two pages.
+ *
+ * Passing is the verdict recorded on that attempt, not the score compared
+ * against the quiz's passing score today. The threshold is editable, so
+ * re-deciding it here would make this panel and the student roster disagree
+ * about the same student — and the roster reports the stored flag.
+ *
+ * Quizzes nobody has attempted are listed with a null rate rather than a zero
+ * one: "nobody has taken it" and "everybody failed it" call for opposite
+ * reactions from an instructor.
+ */
+export function getCourseQuizPassRates(
+  courseId: number,
+  range: AnalyticsRange
+): QuizPassRate[] {
+  const quizRows = db
+    .select({
+      quizId: quizzes.id,
+      title: quizzes.title,
+      passingScore: quizzes.passingScore,
+      moduleTitle: modules.title,
+      lessonTitle: lessons.title,
+    })
+    .from(quizzes)
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId))
+    .orderBy(modules.position, lessons.position, quizzes.id)
+    .all();
+
+  // Sparse by design — most lessons carry no quiz, and plenty of courses carry
+  // none at all. The caller says so on screen rather than drawing an empty panel.
+  if (quizRows.length === 0) return [];
+
+  const quizIds = quizRows.map((quiz) => quiz.quizId);
+
+  // One row per student per quiz, holding the best they managed. Unlike the
+  // progress panels above, attempts are timestamped, so this one can honour
+  // the range control.
+  //
+  // `passed` and `score` are selected bare beside `max(score)`: SQLite answers
+  // those from the very row the maximum came from, which is how the best
+  // attempt's own recorded verdict is read rather than a fresh comparison.
+  const bestAttempts = db
+    .select({
+      quizId: quizAttempts.quizId,
+      bestScore: sql<number>`max(${quizAttempts.score})`.as("best_score"),
+      passed: sql<number>`${quizAttempts.passed}`.as("best_passed"),
+    })
+    .from(quizAttempts)
+    .where(
+      and(
+        inArray(quizAttempts.quizId, quizIds),
+        since(quizAttempts.attemptedAt, range)
+      )
+    )
+    .groupBy(quizAttempts.quizId, quizAttempts.userId)
+    .as("best_attempts");
+
+  const stats = db
+    .select({
+      quizId: bestAttempts.quizId,
+      studentCount: count(),
+      passedCount: sql<number>`sum(${bestAttempts.passed})`,
+      averageBestScore: sql<number>`avg(${bestAttempts.bestScore})`,
+    })
+    .from(bestAttempts)
+    .groupBy(bestAttempts.quizId)
+    .all();
+
+  const statsByQuiz = new Map(stats.map((row) => [row.quizId, row]));
+
+  return quizRows.map((quiz) => {
+    const row = statsByQuiz.get(quiz.quizId);
+    const studentCount = row?.studentCount ?? 0;
+    const passedCount = Number(row?.passedCount ?? 0);
+
+    return {
+      quizId: quiz.quizId,
+      title: quiz.title,
+      moduleTitle: quiz.moduleTitle,
+      lessonTitle: quiz.lessonTitle,
+      passingScorePercent: Math.round(quiz.passingScore * 100),
+      studentCount,
+      passedCount,
+      passRatePercent:
+        studentCount === 0
+          ? null
+          : Math.round((passedCount / studentCount) * 100),
+      averageBestScorePercent:
+        studentCount === 0
+          ? null
+          : Math.round(Number(row?.averageBestScore ?? 0) * 100),
+    };
+  });
+}
+
+export type CountryRevenueRow = {
+  /** Null for purchases made before a country was recorded, or without one. */
+  country: string | null;
+  purchaseCount: number;
+  grossCents: number;
+  /** What the instructor keeps of it, on the same split as every other panel. */
+  netCents: number;
+  /** Share of the course's revenue in the range, 0–100. */
+  sharePercent: number;
+  averagePaidCents: number;
+  /**
+   * The parity discount this country is offered *today*, 0–100, or null when
+   * no country was recorded. A fact about current pricing, not a claim about
+   * what any particular buyer was charged.
+   */
+  discountPercent: number | null;
+};
+
+export type CourseCountryRevenue = {
+  grossCents: number;
+  netCents: number;
+  purchaseCount: number;
+  /** Revenue from countries that currently get a parity discount. */
+  discountedGrossCents: number;
+  discountedNetCents: number;
+  discountedSharePercent: number;
+  rows: CountryRevenueRow[];
+};
+
+/**
+ * Where a course's buyers are, and what each country is worth.
+ *
+ * Purchasing-power-parity discounting is otherwise invisible to an instructor
+ * even though it directly sets what they earn, so each row carries the average
+ * a sale there fetched alongside the discount that country is currently
+ * offered.
+ *
+ * What was actually discounted off any given purchase is *not* reported, and
+ * cannot be: course prices are mutable and no price history is kept, so a
+ * discount reconstructed from today's price would be fiction for every sale
+ * made before the last price change. Country, revenue and the average paid are
+ * all recorded facts.
+ *
+ * Purchases with no country are their own row rather than dropped, so the rows
+ * still sum to the revenue the rest of the page reports, and never count as
+ * discounted — nothing is known about them either way.
+ *
+ * Gross and net both travel with every row, on the same split as every other
+ * money figure on the page: the question being asked is what a region is worth
+ * to the instructor, and that is the net.
+ */
+export function getCourseRevenueByCountry(
+  courseId: number,
+  range: AnalyticsRange
+): CourseCountryRevenue {
+  const rows = db
+    .select({
+      country: purchases.country,
+      gross: sum(purchases.amountPaid),
+      purchaseCount: count(purchases.id),
+    })
+    .from(purchases)
+    .where(
+      and(eq(purchases.courseId, courseId), since(purchases.createdAt, range))
+    )
+    .groupBy(purchases.country)
+    .all()
+    .map((row) => ({
+      country: row.country,
+      grossCents: Number(row.gross ?? 0),
+      purchaseCount: row.purchaseCount,
+    }))
+    .sort((a, b) => b.grossCents - a.grossCents);
+
+  const grossCents = rows.reduce((total, row) => total + row.grossCents, 0);
+  const purchaseCount = rows.reduce(
+    (total, row) => total + row.purchaseCount,
+    0
+  );
+
+  const share = (cents: number) =>
+    grossCents === 0 ? 0 : Math.round((cents / grossCents) * 100);
+
+  let discountedGrossCents = 0;
+
+  const breakdown = rows.map((row) => {
+    const discountPercent =
+      row.country === null ? null : getDiscountForCountry(row.country) * 100;
+
+    if (discountPercent !== null && discountPercent > 0) {
+      discountedGrossCents += row.grossCents;
+    }
+
+    return {
+      ...row,
+      netCents: splitRevenue(row.grossCents).netCents,
+      sharePercent: share(row.grossCents),
+      averagePaidCents: Math.round(row.grossCents / row.purchaseCount),
+      discountPercent,
+    };
+  });
+
+  return {
+    grossCents,
+    netCents: splitRevenue(grossCents).netCents,
+    purchaseCount,
+    discountedGrossCents,
+    discountedNetCents: splitRevenue(discountedGrossCents).netCents,
+    discountedSharePercent: share(discountedGrossCents),
+    rows: breakdown,
+  };
 }
 
 /**

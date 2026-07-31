@@ -5,6 +5,8 @@ import * as schema from "~/db/schema";
 
 let testDb: ReturnType<typeof createTestDb>;
 let base: ReturnType<typeof seedBaseData>;
+/** Keeps generated buyers' emails apart within a test's database. */
+let buyerCount = 0;
 
 vi.mock("~/db", () => ({
   get db() {
@@ -21,6 +23,8 @@ import {
   getStudentRevenue,
   getCourseDropOff,
   getCourseProgressSummary,
+  getCourseQuizPassRates,
+  getCourseRevenueByCountry,
   getTopBuyers,
   hasPublishedCourses,
   listCourseOwners,
@@ -295,6 +299,60 @@ function funnelLessons(funnel: CourseFunnel) {
   return funnel.modules.flatMap((module) => module.lessons);
 }
 
+/** A quiz hung off a lesson, passing at 70% unless a test says otherwise. */
+function seedQuiz(lessonId: number, title: string, passingScore = 0.7) {
+  return testDb
+    .insert(schema.quizzes)
+    .values({ lessonId, title, passingScore })
+    .returning()
+    .get();
+}
+
+/**
+ * An attempt at a quiz, as the quiz runner would record it: scores are the
+ * fractions it stores rather than percentages, and the verdict is settled
+ * against that quiz's own passing score rather than a threshold repeated here.
+ */
+function attempt(
+  userId: number,
+  quizId: number,
+  score: number,
+  attemptedAt = daysAgo(1)
+) {
+  const quiz = testDb
+    .select()
+    .from(schema.quizzes)
+    .where(eq(schema.quizzes.id, quizId))
+    .get()!;
+
+  return testDb
+    .insert(schema.quizAttempts)
+    .values({
+      userId,
+      quizId,
+      score,
+      passed: score >= quiz.passingScore,
+      attemptedAt,
+    })
+    .returning()
+    .get();
+}
+
+/** A sale of a course to someone new, from a country or from nowhere. */
+function buyFrom(
+  courseId: number,
+  amountPaid: number,
+  country: string | null,
+  createdAt = daysAgo(1)
+) {
+  const buyer = seedStudent(`Buyer ${(buyerCount += 1)}`);
+  return testDb
+    .insert(schema.purchases)
+    .values({ userId: buyer.id, courseId, amountPaid, country, createdAt })
+    .returning()
+    .get();
+}
+
 describe("analyticsService", () => {
   beforeEach(() => {
     // The clock is frozen so that a row written "exactly 30 days ago" really is
@@ -306,6 +364,7 @@ describe("analyticsService", () => {
 
     testDb = createTestDb();
     base = seedBaseData(testDb);
+    buyerCount = 0;
   });
 
   afterEach(() => {
@@ -1284,6 +1343,274 @@ describe("analyticsService", () => {
       expect(
         listInstructorCourses(null).map((course) => course.courseId)
       ).toContain(rival.course.id);
+    });
+  });
+
+  describe("getCourseQuizPassRates", () => {
+    it("counts a retaken quiz once, on the student's best attempt", () => {
+      const [{ lessons: courseLessons }] = seedCurriculum(base.course.id, [1]);
+      const quiz = seedQuiz(courseLessons[0].id, "Fundamentals");
+      const student = seedStudent("Retaker");
+
+      // Failed, went away, came back and passed: one student, one pass.
+      attempt(student.id, quiz.id, 0.4, daysAgo(5));
+      attempt(student.id, quiz.id, 0.9, daysAgo(2));
+
+      expect(getCourseQuizPassRates(base.course.id, "all")).toEqual([
+        expect.objectContaining({
+          quizId: quiz.id,
+          title: "Fundamentals",
+          studentCount: 1,
+          passedCount: 1,
+          passRatePercent: 100,
+          averageBestScorePercent: 90,
+        }),
+      ]);
+    });
+
+    it("does not let a later worse attempt undo a pass", () => {
+      const [{ lessons: courseLessons }] = seedCurriculum(base.course.id, [1]);
+      const quiz = seedQuiz(courseLessons[0].id, "Fundamentals");
+      const student = seedStudent("Careless");
+
+      attempt(student.id, quiz.id, 0.9, daysAgo(5));
+      attempt(student.id, quiz.id, 0.2, daysAgo(2));
+
+      expect(getCourseQuizPassRates(base.course.id, "all")[0]).toMatchObject({
+        studentCount: 1,
+        passedCount: 1,
+      });
+    });
+
+    it("averages the pass rate over students rather than over attempts", () => {
+      const [{ lessons: courseLessons }] = seedCurriculum(base.course.id, [1]);
+      const quiz = seedQuiz(courseLessons[0].id, "Fundamentals");
+
+      // One student flailing through four attempts, one passing first time:
+      // half the students pass, though only two attempts in five did.
+      const flailer = seedStudent("Flailer");
+      for (const score of [0.1, 0.2, 0.3, 0.4]) {
+        attempt(flailer.id, quiz.id, score);
+      }
+      attempt(seedStudent("Ace").id, quiz.id, 1);
+
+      expect(getCourseQuizPassRates(base.course.id, "all")[0]).toMatchObject({
+        studentCount: 2,
+        passedCount: 1,
+        passRatePercent: 50,
+      });
+    });
+
+    it("reports the verdict recorded on the best attempt, as the roster does", () => {
+      const [{ lessons: courseLessons }] = seedCurriculum(base.course.id, [2]);
+      const lenient = seedQuiz(courseLessons[0].id, "Lenient", 0.4);
+      const strict = seedQuiz(courseLessons[1].id, "Strict", 0.9);
+      const student = seedStudent("Middling");
+
+      attempt(student.id, lenient.id, 0.5);
+      attempt(student.id, strict.id, 0.5);
+
+      const rates = getCourseQuizPassRates(base.course.id, "all");
+
+      expect(rates.map((rate) => rate.title)).toEqual(["Lenient", "Strict"]);
+      expect(rates[0]).toMatchObject({
+        passingScorePercent: 40,
+        passedCount: 1,
+      });
+      expect(rates[1]).toMatchObject({
+        passingScorePercent: 90,
+        passedCount: 0,
+        passRatePercent: 0,
+      });
+    });
+
+    it("lists a quiz nobody has attempted, with no rate at all", () => {
+      const [{ lessons: courseLessons }] = seedCurriculum(base.course.id, [1]);
+      const quiz = seedQuiz(courseLessons[0].id, "Untouched");
+
+      expect(getCourseQuizPassRates(base.course.id, "all")).toEqual([
+        expect.objectContaining({
+          quizId: quiz.id,
+          studentCount: 0,
+          passedCount: 0,
+          passRatePercent: null,
+          averageBestScorePercent: null,
+        }),
+      ]);
+    });
+
+    it("has nothing to report for a course with no quizzes", () => {
+      seedCurriculum(base.course.id, [2]);
+
+      expect(getCourseQuizPassRates(base.course.id, "all")).toEqual([]);
+    });
+
+    it("names the lesson and module the quiz sits in, in course order", () => {
+      const curriculum = seedCurriculum(base.course.id, [1, 1]);
+      seedQuiz(curriculum[1].lessons[0].id, "Later quiz");
+      seedQuiz(curriculum[0].lessons[0].id, "Earlier quiz");
+
+      expect(getCourseQuizPassRates(base.course.id, "all")).toEqual([
+        expect.objectContaining({
+          title: "Earlier quiz",
+          moduleTitle: "Module 1",
+          lessonTitle: "Module 1 lesson 1",
+        }),
+        expect.objectContaining({
+          title: "Later quiz",
+          moduleTitle: "Module 2",
+          lessonTitle: "Module 2 lesson 1",
+        }),
+      ]);
+    });
+
+    it("leaves out another course's quizzes", () => {
+      const [{ lessons: ours }] = seedCurriculum(base.course.id, [1]);
+      const second = seedSecondCourse();
+      const [{ lessons: theirs }] = seedCurriculum(second.id, [1]);
+      seedQuiz(ours[0].id, "Ours");
+      seedQuiz(theirs[0].id, "Theirs");
+
+      expect(
+        getCourseQuizPassRates(base.course.id, "all").map((rate) => rate.title)
+      ).toEqual(["Ours"]);
+    });
+
+    it("counts only the attempts made inside the range", () => {
+      const [{ lessons: courseLessons }] = seedCurriculum(base.course.id, [1]);
+      const quiz = seedQuiz(courseLessons[0].id, "Fundamentals");
+      const student = seedStudent("Improver");
+
+      // The old failure is outside the window, so the recent pass stands alone.
+      attempt(student.id, quiz.id, 0.2, daysAgo(60));
+      attempt(student.id, quiz.id, 0.8, daysAgo(2));
+      attempt(seedStudent("Ancient").id, quiz.id, 0.9, daysAgo(60));
+
+      expect(getCourseQuizPassRates(base.course.id, "7d")[0]).toMatchObject({
+        studentCount: 1,
+        passedCount: 1,
+        averageBestScorePercent: 80,
+      });
+    });
+  });
+
+  describe("getCourseRevenueByCountry", () => {
+    it("groups a course's sales by country, biggest earner first", () => {
+      buyFrom(base.course.id, 5000, "US");
+      buyFrom(base.course.id, 5000, "US");
+      buyFrom(base.course.id, 2500, "IN");
+
+      const breakdown = getCourseRevenueByCountry(base.course.id, "all");
+
+      expect(breakdown.grossCents).toBe(12500);
+      expect(breakdown.purchaseCount).toBe(3);
+      expect(breakdown.rows).toEqual([
+        expect.objectContaining({
+          country: "US",
+          purchaseCount: 2,
+          grossCents: 10000,
+          sharePercent: 80,
+          averagePaidCents: 5000,
+        }),
+        expect.objectContaining({
+          country: "IN",
+          purchaseCount: 1,
+          grossCents: 2500,
+          sharePercent: 20,
+          averagePaidCents: 2500,
+        }),
+      ]);
+    });
+
+    it("carries what the instructor keeps, not only what buyers paid", () => {
+      buyFrom(base.course.id, 10000, "US");
+      buyFrom(base.course.id, 2500, "IN");
+
+      const breakdown = getCourseRevenueByCountry(base.course.id, "all");
+
+      // The same 20% split as every other money figure on the page: a panel
+      // about what a region is worth to the instructor has to say the net.
+      expect(breakdown.netCents).toBe(10000);
+      expect(breakdown.discountedNetCents).toBe(2000);
+      expect(breakdown.rows[0].netCents).toBe(8000);
+    });
+
+    it("keeps purchases with no recorded country as their own row", () => {
+      buyFrom(base.course.id, 6000, "GB");
+      buyFrom(base.course.id, 4000, null);
+
+      const breakdown = getCourseRevenueByCountry(base.course.id, "all");
+
+      // Not dropped, and not folded into a country it did not come from: the
+      // rows have to add up to the revenue the rest of the page reports.
+      expect(breakdown.grossCents).toBe(10000);
+      expect(breakdown.rows.map((row) => row.country)).toEqual(["GB", null]);
+      expect(breakdown.rows[1]).toMatchObject({
+        grossCents: 4000,
+        sharePercent: 40,
+        discountPercent: null,
+      });
+    });
+
+    it("marks each country with the parity discount it currently gets", () => {
+      buyFrom(base.course.id, 5000, "US");
+      buyFrom(base.course.id, 2500, "IN");
+
+      const byCountry = new Map(
+        getCourseRevenueByCountry(base.course.id, "all").rows.map((row) => [
+          row.country,
+          row.discountPercent,
+        ])
+      );
+
+      expect(byCountry.get("US")).toBe(0);
+      expect(byCountry.get("IN")).toBe(50);
+    });
+
+    it("totals the revenue coming from discounted regions", () => {
+      buyFrom(base.course.id, 5000, "US");
+      buyFrom(base.course.id, 2500, "IN");
+      buyFrom(base.course.id, 1500, "NG");
+      buyFrom(base.course.id, 1000, null);
+
+      const breakdown = getCourseRevenueByCountry(base.course.id, "all");
+
+      // A purchase with no country is not counted as discounted — nothing is
+      // known about it, and guessing would overstate the discounted share.
+      expect(breakdown.discountedGrossCents).toBe(4000);
+      expect(breakdown.discountedSharePercent).toBe(40);
+    });
+
+    it("counts only sales of the selected course", () => {
+      const second = seedSecondCourse();
+      buyFrom(base.course.id, 5000, "US");
+      buyFrom(second.id, 9900, "US");
+
+      expect(getCourseRevenueByCountry(base.course.id, "all").grossCents).toBe(
+        5000
+      );
+    });
+
+    it("counts only sales inside the range", () => {
+      buyFrom(base.course.id, 5000, "US", daysAgo(2));
+      buyFrom(base.course.id, 9900, "US", daysAgo(60));
+
+      const breakdown = getCourseRevenueByCountry(base.course.id, "7d");
+
+      expect(breakdown.grossCents).toBe(5000);
+      expect(breakdown.purchaseCount).toBe(1);
+    });
+
+    it("reports zeroes, not NaN, for a course that has not sold", () => {
+      expect(getCourseRevenueByCountry(base.course.id, "all")).toEqual({
+        grossCents: 0,
+        netCents: 0,
+        purchaseCount: 0,
+        discountedGrossCents: 0,
+        discountedNetCents: 0,
+        discountedSharePercent: 0,
+        rows: [],
+      });
     });
   });
 });
