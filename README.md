@@ -1,5 +1,5 @@
 <div align="center">
-<a href="https://www.aihero.dev/ai-coding-crash-course">
+<a href="https://www.aihero.dev/workshops/ai-coding-crash-course">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1786022423/github-project-header-dark_2x.png" />
     <source media="(prefers-color-scheme: light)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1786022424/github-project-header-light_2x.png" />
