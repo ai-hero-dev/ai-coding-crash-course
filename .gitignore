@@ -21,3 +21,6 @@
 /request-logger/logs/*
 !/request-logger/logs/.gitkeep
 
+# request-logger remembers which agent you chose
+/request-logger/.agent-choice.json
+
