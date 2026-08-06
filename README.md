@@ -10,7 +10,7 @@
 <br/>
 
 
-> The exercise repo for the [AI Coding Crash Course](https://www.aihero.dev/ai-coding-crash-course) — a self-paced course from Matt Pocock on AI-assisted engineering with Claude Code.
+> The exercise repo for the [AI Coding Crash Course](https://www.aihero.dev/workshops/ai-coding-crash-course) — a self-paced course from Matt Pocock on AI-assisted engineering with Claude Code.
 
 This is a full-stack course platform (think a mini Udemy) built with React Router, TypeScript, SQLite, and Drizzle ORM. Throughout the course, you'll use Claude Code to explore, extend, and refactor this codebase — learning real engineering workflows for AI-assisted development along the way.
 
@@ -85,4 +85,4 @@ npm run cherry-pick course-star-ratings
 
 ## License
 
-This repository is for students of the [AI Coding Crash Course](https://www.aihero.dev/ai-coding-crash-course). All rights reserved.
+This repository is for students of the [AI Coding Crash Course](https://www.aihero.dev/workshops/ai-coding-crash-course). All rights reserved.
