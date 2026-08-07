@@ -25,6 +25,9 @@ To change a remembered answer:
 npm run request-logger -- --force
 ```
 
+This keeps the new answer in place of the old one. It does not ask whether to
+remember, because you already said yes once.
+
 To use a different port:
 
 ```bash
@@ -44,12 +47,12 @@ from this table. It is here so you can see what is supported before you start.
 | Agent            | Works | What you need                                   |
 | ---------------- | ----- | ----------------------------------------------- |
 | Claude Code      | Yes   | One command. Works with a subscription login.    |
-| Codex            | Yes   | An OpenAI API key.                               |
+| Codex            | Yes   | One flag. A subscription or an API key works.    |
 | GitHub Copilot   | Yes   | Your normal subscription login.                  |
-| Cursor CLI       | No    | Nothing can make it work. See below.             |
 | OpenCode         | Yes   | One command, or a config file.                   |
 | Pi               | Yes   | A config file. Pi has no base URL variable.      |
 | Gemini CLI       | Yes   | One command. The free Google login works.        |
+| Cursor CLI       | No    | Nothing can make it work. See below.             |
 | Amp              | No    | Nothing can make it work. See below.             |
 
 ### Why Cursor and Amp cannot work
@@ -164,10 +167,14 @@ of these happened:
    turn writes no log at all. The printed command sets the right transport where
    it can.
 3. **You are signed in a way that goes around the tool.** A ChatGPT sign-in on
-   Codex, and a ChatGPT sign-in on OpenCode, both talk to a different host on
-   purpose. Use an API key for those.
+   OpenCode talks to a different host on purpose. Use an API key for that one.
+   Codex is different: pick the ChatGPT route in the wizard and it works.
 4. **You started your agent before setting the variable.** Agents read the
    variable once, at startup.
+5. **You are on an older Codex, or following an older guide.** Codex used to
+   read an OPENAI_BASE_URL variable. Version 0.133.0 does not. It ignores the
+   variable in silence, so the only sign is an empty logs folder. Use the
+   command this tool prints.
 
 ## How much this was tested
 

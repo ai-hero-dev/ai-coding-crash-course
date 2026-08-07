@@ -18,8 +18,19 @@ import { listAgents, listProviders, type AgentChoice } from "./agents";
 
 export interface WizardAnswer {
   choice: AgentChoice;
-  /** True only when the student asked for the choice to be kept. */
+  /** True only when the choice is to be kept. */
   remember: boolean;
+}
+
+export interface AskOptions {
+  /**
+   * Whether to ask if the answer should be kept.
+   *
+   * False when the student has already answered that question. Running with
+   * --force replaces a preference they chose to keep, so asking again would
+   * only make them say yes twice.
+   */
+  offerToRemember: boolean;
 }
 
 export function loadChoice(file: string): AgentChoice | null {
@@ -55,7 +66,7 @@ function stopIfCancelled<T>(value: T | symbol): T {
   return value as T;
 }
 
-export async function askChoice(): Promise<WizardAnswer> {
+export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
   intro(styleText("bold", " request-logger "));
 
   const agents = listAgents();
@@ -91,6 +102,8 @@ export async function askChoice(): Promise<WizardAnswer> {
   // student clear the file before they could try a different one, so the
   // question is not asked at all.
   if (agent && !agent.supported) return { choice, remember: false };
+
+  if (!options.offerToRemember) return { choice, remember: true };
 
   const remember = stopIfCancelled(
     await confirm({

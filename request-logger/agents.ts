@@ -99,6 +99,24 @@ interface AgentEntry {
   reason?: string;
 }
 
+/**
+ * Codex has no base URL environment variable. OPENAI_BASE_URL was read by older
+ * versions and is gone from 0.133.0, so a student following an older guide gets
+ * an empty logs folder and no error. The `-c` flag sets one config key for one
+ * run, which is why it is used here in place of editing a file.
+ */
+const CODEX_OVERRIDE_NOTE =
+  "The -c flag sets this for one run only. Your ~/.codex/config.toml is not " +
+  "touched, so your normal Codex is unchanged the moment you stop using this " +
+  "command. Keep the quotes exactly as they are: Codex reads the value as TOML, " +
+  "and an unquoted URL does not parse.";
+
+const CODEX_WEBSOCKET_WARNING =
+  "Some models prefer a WebSocket. This tool cannot see a WebSocket, so Codex " +
+  "tries one, waits, and then falls back to plain HTTP, which is what you end " +
+  "up reading. The turn still gets logged. It just takes a few seconds longer " +
+  "to start than usual.";
+
 const PI_NOTE =
   "Pi has no base URL variable and no flag. A config file is the only way to " +
   "point it at this tool. Overriding the provider keeps Pi's whole built-in " +
@@ -166,20 +184,30 @@ const AGENTS: AgentEntry[] = [
     label: "Codex",
     providers: [
       {
+        id: "chatgpt",
+        label: "ChatGPT subscription",
+        upstreamHost: "chatgpt.com",
+        renderer: "openai",
+        // Codex joins the base URL and the word `responses` with one slash, so
+        // the base URL must carry the whole prefix that it would otherwise use,
+        // which is https://chatgpt.com/backend-api/codex.
+        suffix: "/backend-api/codex",
+        bin: "codex",
+        args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        notes: [CODEX_OVERRIDE_NOTE],
+        warnings: [CODEX_WEBSOCKET_WARNING],
+      },
+      {
         id: "openai",
         label: "OpenAI API key",
         upstreamHost: "api.openai.com",
         renderer: "openai",
-        env: [["OPENAI_BASE_URL", "{baseUrl}"]],
+        // The API key route defaults to https://api.openai.com/v1, and Codex
+        // appends `responses` to it, so the base URL keeps the /v1.
+        suffix: "/v1",
         bin: "codex",
-        notes: [
-          "You can also set openai_base_url in ~/.codex/config.toml instead.",
-        ],
-        warnings: [
-          "Sign in with ChatGPT will not work here. That login talks to a different " +
-            "host, so it goes around this tool and your logs folder stays empty. " +
-            "Sign in with an OpenAI API key to get a capture.",
-        ],
+        args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        notes: [CODEX_OVERRIDE_NOTE],
       },
     ],
   },
@@ -194,12 +222,15 @@ const AGENTS: AgentEntry[] = [
         renderer: "openai",
         env: [["COPILOT_API_URL", "{baseUrl}"]],
         bin: "copilot",
-        args: ["--disable-builtin-mcps"],
         notes: [
           "Your normal Copilot subscription login is enough. You do not need an " +
             "API key. Sign-in traffic still goes to github.com. Only the model " +
             "traffic moves.",
-          "--disable-builtin-mcps keeps the built-in MCP chatter out of your logs folder.",
+          "Copilot's built-in MCP servers add their tools to every request, and " +
+            "they make calls of their own, so you get more documents than turns " +
+            "you typed. That is what your agent really sends, so it is worth " +
+            "reading once. If you want a smaller capture, add " +
+            "--disable-builtin-mcps to the command.",
         ],
         warnings: [
           "Some models negotiate a WebSocket transport. This tool cannot see a " +
@@ -482,10 +513,12 @@ export function shouldLogRequest(
 // ---------------------------------------------------------------------------
 
 function buildCommand(provider: ProviderEntry, baseUrl: string): string {
-  const env = (provider.env ?? []).map(
-    ([key, value]) => `${key}=${value.replace(/\{baseUrl\}/g, baseUrl)}`
-  );
-  return [...env, provider.bin, ...(provider.args ?? [])].join(" ");
+  const fill = (text: string) => text.replace(/\{baseUrl\}/g, baseUrl);
+  const env = (provider.env ?? []).map(([key, value]) => `${key}=${fill(value)}`);
+  // Arguments take the base URL too. Codex has no variable for it, so its
+  // whole override arrives as a flag.
+  const args = (provider.args ?? []).map(fill);
+  return [...env, provider.bin, ...args].join(" ");
 }
 
 /**

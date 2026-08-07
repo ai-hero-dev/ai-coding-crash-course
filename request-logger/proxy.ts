@@ -249,12 +249,14 @@ function printBanner(target: ResolvedTarget): void {
 }
 
 /**
- * Ask the wizard, and keep the answer only if the student asked for it to be
- * kept. An agent that cannot be logged is never saved, because the wizard does
- * not offer to remember one.
+ * Ask the wizard, and keep the answer only if it is to be kept.
+ *
+ * `offerToRemember` is false when the student has already answered that
+ * question: --force replaces a preference they chose to keep, so the new answer
+ * simply takes its place. An agent that cannot be logged is never saved.
  */
-async function ask(): Promise<AgentChoice> {
-  const { choice, remember } = await askChoice();
+async function ask(offerToRemember: boolean): Promise<AgentChoice> {
+  const { choice, remember } = await askChoice({ offerToRemember });
   if (remember) saveChoice(STATE_FILE, choice);
   return choice;
 }
@@ -263,7 +265,7 @@ async function main(): Promise<void> {
   const force = process.argv.includes("--force");
 
   let choice = force ? null : loadChoice(STATE_FILE);
-  if (!choice) choice = await ask();
+  if (!choice) choice = await ask(!force);
 
   let resolution = resolveChoice(choice, { port: PORT });
 
@@ -272,7 +274,8 @@ async function main(): Promise<void> {
   if (resolution.kind === "error") {
     console.log("");
     console.log(`[request-logger] ${resolution.message}`);
-    choice = await ask();
+    // A saved file exists, so the student already asked to be remembered.
+    choice = await ask(false);
     resolution = resolveChoice(choice, { port: PORT });
   }
 

@@ -93,8 +93,12 @@ describe("resolveChoice — upstream hosts", () => {
     expect(target("claude-code").upstreamHost).toBe("api.anthropic.com");
   });
 
-  it("sends Codex to OpenAI", () => {
-    expect(target("codex").upstreamHost).toBe("api.openai.com");
+  it("sends Codex on an API key to OpenAI", () => {
+    expect(target("codex", "openai").upstreamHost).toBe("api.openai.com");
+  });
+
+  it("sends Codex on a ChatGPT subscription to chatgpt.com", () => {
+    expect(target("codex", "chatgpt").upstreamHost).toBe("chatgpt.com");
   });
 
   it("sends Copilot to its own host", () => {
@@ -150,7 +154,8 @@ describe("resolveChoice — renderers", () => {
   });
 
   it("reads Codex with the OpenAI renderer", () => {
-    expect(target("codex").renderer).toBe("openai");
+    expect(target("codex", "openai").renderer).toBe("openai");
+    expect(target("codex", "chatgpt").renderer).toBe("openai");
   });
 
   it("reads Copilot with the OpenAI renderer", () => {
@@ -236,18 +241,34 @@ describe("resolveChoice — commands", () => {
     );
   });
 
-  it("sets the base URL for Codex", () => {
-    expect(target("codex").command).toBe(
-      "OPENAI_BASE_URL=http://localhost:8787 codex"
+  it("sets the base URL for Codex on an API key", () => {
+    // Codex 0.133.0 has no OPENAI_BASE_URL. The flag is the only door.
+    expect(target("codex", "openai").command).toBe(
+      `codex -c 'openai_base_url="http://localhost:8787/v1"'`
     );
+  });
+
+  it("sets the base URL for Codex on a ChatGPT subscription", () => {
+    expect(target("codex", "chatgpt").command).toBe(
+      `codex -c 'openai_base_url="http://localhost:8787/backend-api/codex"'`
+    );
+  });
+
+  it("never tells a Codex student to use the variable that was removed", () => {
+    expect(target("codex", "openai").command).not.toContain("OPENAI_BASE_URL");
+    expect(target("codex", "chatgpt").command).not.toContain("OPENAI_BASE_URL");
   });
 
   it("uses Copilot's own variable", () => {
     expect(target("copilot").command).toContain("COPILOT_API_URL=");
   });
 
-  it("keeps Copilot's built-in MCP chatter out of the logs", () => {
-    expect(target("copilot").command).toContain("--disable-builtin-mcps");
+  it("does not change how a Copilot student runs their agent", () => {
+    // The built-in MCP servers are part of what Copilot really sends. Turning
+    // them off would make the capture tidier and less true.
+    expect(target("copilot").command).toBe(
+      "COPILOT_API_URL=http://localhost:8787 copilot"
+    );
   });
 
   it("carries the suffix through into the OpenCode command", () => {
@@ -346,8 +367,16 @@ describe("resolveChoice — notes and warnings", () => {
     expect(target("claude-code").notes.join(" ")).toContain("ENABLE_TOOL_SEARCH");
   });
 
-  it("warns a Codex student off the ChatGPT sign-in", () => {
-    expect(target("codex").warnings.join(" ")).toContain("ChatGPT");
+  it("warns a Codex student on a subscription about the WebSocket wait", () => {
+    expect(target("codex", "chatgpt").warnings.join(" ")).toContain("WebSocket");
+  });
+
+  it("tells a Codex student the flag does not touch their config file", () => {
+    expect(target("codex", "openai").notes.join(" ")).toContain("config.toml");
+  });
+
+  it("tells a Copilot student where the extra documents come from", () => {
+    expect(target("copilot").notes.join(" ")).toContain("MCP");
   });
 
   it("warns a Copilot student that some models write no log", () => {
