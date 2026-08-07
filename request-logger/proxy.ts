@@ -29,7 +29,7 @@ import {
   type AgentChoice,
   type ResolvedTarget,
 } from "./agents";
-import { askChoice, loadChoice, saveChoice } from "./config";
+import { askChoice, clearChoice, loadChoice, saveChoice } from "./config";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -269,6 +269,11 @@ async function ask(offerToRemember: boolean): Promise<AgentChoice> {
 async function main(): Promise<void> {
   const force = process.argv.includes("--force");
 
+  // --force forgets the old answer before it asks. The new answer then replaces
+  // it, and a choice that is never saved, such as an agent that cannot be
+  // logged, leaves nothing stale behind.
+  if (force) clearChoice(STATE_FILE);
+
   let choice = force ? null : loadChoice(STATE_FILE);
   if (!choice) choice = await ask(!force);
 
@@ -287,6 +292,34 @@ async function main(): Promise<void> {
   if (resolution.kind === "error") {
     console.error(`[request-logger] ${resolution.message}`);
     process.exit(1);
+  }
+
+  if (resolution.kind === "request") {
+    const rule = dim("-".repeat(72));
+    const what = resolution.agentLabel
+      ? `${resolution.agentLabel} in that setup is`
+      : "Your agent is";
+    console.log("");
+    console.log(rule);
+    console.log(`  ${bold(`${what} not in this list yet.`)}`);
+    console.log(rule);
+    console.log("");
+    for (const line of wrap(
+      "This list holds the setups that have been tested. Yours can be added. " +
+        "Each one needs three facts: the host your agent talks to, the wire " +
+        "format it uses, and the command that points it at this tool.",
+      68
+    )) {
+      console.log(`  ${line}`);
+    }
+    console.log("");
+    console.log("  Ask for it here, and say which agent you use:");
+    console.log("");
+    console.log(`      ${bold(resolution.url)}`);
+    console.log("");
+    console.log(dim("  Nothing was saved, so the next run asks again."));
+    console.log("");
+    return;
   }
 
   if (resolution.kind === "refusal") {

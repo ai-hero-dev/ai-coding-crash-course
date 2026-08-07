@@ -56,7 +56,39 @@ export interface ResolveError {
   message: string;
 }
 
-export type Resolution = ResolvedTarget | AgentRefusal | ResolveError;
+/**
+ * The student's setup is not in the catalogue, and they said so.
+ *
+ * This is not an error. The catalogue is a list of what has been tested, not a
+ * list of what is possible, so the only useful answer is to ask for the missing
+ * entry. It is never saved.
+ */
+export interface SetupRequest {
+  kind: "request";
+  /** The agent, when the student named one the catalogue knows. */
+  agentLabel: string | null;
+  /** Where to ask for the missing entry. */
+  url: string;
+}
+
+export type Resolution =
+  | ResolvedTarget
+  | AgentRefusal
+  | ResolveError
+  | SetupRequest;
+
+/**
+ * The last option in both questions.
+ *
+ * A student whose agent or provider is missing has nowhere to go otherwise.
+ * They would either pick the nearest wrong thing and read a capture that is not
+ * theirs, or quit. Both questions therefore end with this, and it leads to the
+ * issue tracker.
+ */
+export const OTHER_ID = "other";
+export const OTHER_LABEL = "Other, or not sure";
+export const ISSUE_URL =
+  "https://github.com/ai-hero-dev/ai-coding-crash-course/issues/new";
 
 export interface SetupFile {
   path: string;
@@ -216,9 +248,6 @@ const AGENTS: AgentEntry[] = [
         env: [["COPILOT_API_URL", "{baseUrl}"]],
         bin: "copilot",
         notes: [
-          "Your normal Copilot subscription login is enough. You do not need an " +
-            "API key. Sign-in traffic still goes to github.com. Only the model " +
-            "traffic moves.",
           "Copilot's built-in MCP servers add their tools to every request, and " +
             "they make calls of their own, so you get more documents than turns " +
             "you typed. That is what your agent really sends, so it is worth " +
@@ -526,6 +555,17 @@ export function resolveChoice(
   options: { port: number }
 ): Resolution {
   const agent = AGENTS.find((a) => a.id === choice.agent);
+
+  // "Other" at either question means the same thing: the catalogue has no entry
+  // for this student. Checked before the agent lookup, because "other" is not
+  // an agent and must not read as an unknown one.
+  if (choice.agent === OTHER_ID || choice.provider === OTHER_ID) {
+    return {
+      kind: "request",
+      agentLabel: agent?.label ?? null,
+      url: ISSUE_URL,
+    };
+  }
 
   if (!agent) {
     return {

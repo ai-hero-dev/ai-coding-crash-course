@@ -22,14 +22,19 @@ time. It then prints the exact command for your setup, and starts listening.
 It keeps listening until you stop it. Press **Ctrl+C** to stop it. The console
 says so too.
 
+Both questions end with **Other, or not sure**. Pick it if your setup is not in
+the list, and the tool gives you a link to ask for it. Nothing is saved when you
+do, so the next run asks again.
+
 To change a remembered answer:
 
 ```bash
 npm run request-logger -- --force
 ```
 
-This keeps the new answer in place of the old one. It does not ask whether to
-remember, because you already said yes once.
+This forgets the old answer first, then keeps the new one in its place. It does
+not ask whether to remember, because you already said yes once. If you pick an
+agent that cannot be logged, nothing is kept, and the old answer is gone too.
 
 To use a different port:
 

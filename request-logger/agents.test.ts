@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  ISSUE_URL,
   listAgents,
   listProviders,
+  OTHER_ID,
   resolveChoice,
   shouldLogRequest,
 } from "./agents";
@@ -18,6 +20,44 @@ function target(agent: string, provider?: string) {
   }
   return result;
 }
+
+describe('resolveChoice — "Other"', () => {
+  it("asks for the missing agent instead of failing", () => {
+    const result = resolveChoice({ agent: OTHER_ID }, PORT);
+    expect(result.kind).toBe("request");
+  });
+
+  it("asks for the missing provider of an agent it knows", () => {
+    const result = resolveChoice({ agent: "codex", provider: OTHER_ID }, PORT);
+    expect(result.kind).toBe("request");
+  });
+
+  it("names the agent when the student named one", () => {
+    const result = resolveChoice({ agent: "codex", provider: OTHER_ID }, PORT);
+    if (result.kind !== "request") throw new Error("expected a request");
+    expect(result.agentLabel).toBe("Codex");
+  });
+
+  it("names no agent when the agent itself was the missing one", () => {
+    const result = resolveChoice({ agent: OTHER_ID }, PORT);
+    if (result.kind !== "request") throw new Error("expected a request");
+    expect(result.agentLabel).toBeNull();
+  });
+
+  it("sends the student to the issue tracker", () => {
+    const result = resolveChoice({ agent: OTHER_ID }, PORT);
+    if (result.kind !== "request") throw new Error("expected a request");
+    expect(result.url).toBe(ISSUE_URL);
+    expect(result.url).toContain("/issues/new");
+  });
+
+  it("never offers Other as an agent in the catalogue", () => {
+    // The wizard adds it to the question. It is not an agent, so it must not
+    // appear in the list the catalogue publishes.
+    expect(listAgents().map((agent) => agent.id)).not.toContain(OTHER_ID);
+    expect(listProviders("codex").map((p) => p.id)).not.toContain(OTHER_ID);
+  });
+});
 
 describe("listAgents", () => {
   it("offers the agents in popularity order, refused ones last", () => {
