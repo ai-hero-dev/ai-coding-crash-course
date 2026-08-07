@@ -317,8 +317,6 @@ async function main(): Promise<void> {
     console.log("");
     console.log(`      ${bold(resolution.url)}`);
     console.log("");
-    console.log(dim("  Nothing was saved, so the next run asks again."));
-    console.log("");
     return;
   }
 

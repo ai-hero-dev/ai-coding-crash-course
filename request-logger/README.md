@@ -23,8 +23,7 @@ It keeps listening until you stop it. Press **Ctrl+C** to stop it. The console
 says so too.
 
 Both questions end with **Other, or not sure**. Pick it if your setup is not in
-the list, and the tool gives you a link to ask for it. Nothing is saved when you
-do, so the next run asks again.
+the list, and the tool gives you a link to ask for it.
 
 To change a remembered answer:
 
