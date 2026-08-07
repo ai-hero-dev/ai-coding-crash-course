@@ -20,17 +20,22 @@ function target(agent: string, provider?: string) {
 }
 
 describe("listAgents", () => {
-  it("offers the agents in popularity order", () => {
+  it("offers the agents in popularity order, refused ones last", () => {
     expect(listAgents().map((agent) => agent.id)).toEqual([
       "claude-code",
       "codex",
       "copilot",
-      "cursor",
       "opencode",
       "pi",
       "gemini",
+      "cursor",
       "amp",
     ]);
+  });
+
+  it("puts every agent that can be logged above every agent that cannot", () => {
+    const supported = listAgents().map((agent) => agent.supported);
+    expect(supported.indexOf(false)).toBeGreaterThan(supported.lastIndexOf(true));
   });
 
   it("marks Cursor as unsupported", () => {

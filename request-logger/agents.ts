@@ -421,14 +421,25 @@ export interface ProviderSummary {
   label: string;
 }
 
-/** Every agent the wizard offers, in the order it offers them. */
+/**
+ * Every agent the wizard offers, in the order it offers them.
+ *
+ * The catalogue is written in order of popularity. The list is then sorted so
+ * the agents that cannot be logged sit at the bottom, because a student picking
+ * from the top should meet the ones that work first. The sort is stable, so
+ * popularity still decides the order inside each group.
+ */
 export function listAgents(): AgentSummary[] {
-  return AGENTS.map((agent) => ({
+  const summaries = AGENTS.map((agent) => ({
     id: agent.id,
     label: agent.label,
     supported: agent.providers != null,
     needsProvider: (agent.providers?.length ?? 0) > 1,
   }));
+  return [
+    ...summaries.filter((agent) => agent.supported),
+    ...summaries.filter((agent) => !agent.supported),
+  ];
 }
 
 /** The providers to ask about for one agent. Empty when there is nothing to ask. */

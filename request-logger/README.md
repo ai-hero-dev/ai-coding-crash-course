@@ -15,10 +15,11 @@ npm run request-logger
 ```
 
 The first time you run it, it asks which agent you use. If your agent can drive
-more than one model provider, it asks which provider. It then remembers your
-answer, prints the exact command for your setup, and starts listening.
+more than one model provider, it asks which provider. Last, it asks whether to
+remember your answer. Say no if you swap agents often, and it asks again every
+time. It then prints the exact command for your setup, and starts listening.
 
-To change your answer later:
+To change a remembered answer:
 
 ```bash
 npm run request-logger -- --force
@@ -30,10 +31,10 @@ To use a different port:
 PORT=9000 npm run request-logger
 ```
 
-Your answer is kept in `request-logger/.agent-choice.json`, which is gitignored.
-It holds your choice only. The host, the renderer and the command are worked out
-again on every start, so an update to this tool reaches you without you having
-to clear anything.
+A remembered answer is kept in `request-logger/.agent-choice.json`, which is
+gitignored. It holds your choice only. The host, the renderer and the command are
+worked out again on every start, so an update to this tool reaches you without
+you having to clear anything.
 
 ## The agents
 
@@ -118,7 +119,7 @@ were sent, so you can still replay it.
 
 ## How it works
 
-- One process, one port, **one upstream host**. Your saved choice decides where
+- One process, one port, **one upstream host**. Your choice decides where
   requests go and how they are read. The tool does not guess from the URL,
   because several agents share the same URLs and guessing gets them wrong.
 - Your real auth header passes through untouched, so your requests authenticate

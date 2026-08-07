@@ -21,8 +21,14 @@ import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
-import { resolveChoice, shouldLogRequest, type ResolvedTarget } from "./agents";
+import {
+  resolveChoice,
+  shouldLogRequest,
+  type AgentChoice,
+  type ResolvedTarget,
+} from "./agents";
 import { askChoice, loadChoice, saveChoice } from "./config";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -152,7 +158,9 @@ function writeCapture(c: Capture): void {
 
   if (!shouldLogRequest(c.method, c.path, c.target.renderer)) {
     console.log(
-      `[request-logger] ${label}  ${c.method} ${c.path} -> ${c.statusCode}  (housekeeping, not logged)`
+      dim(
+        `[request-logger] ${label}  ${c.method} ${c.path} -> ${c.statusCode}  (housekeeping, not logged)`
+      )
     );
     return;
   }
@@ -178,7 +186,9 @@ function writeCapture(c: Capture): void {
       })
     );
     console.log(
-      `[request-logger] ${label}  ${c.method} ${c.path} -> ${c.statusCode}  logs/${c.base}.md`
+      `${dim(`[request-logger] ${label}  ${c.method} ${c.path} ->`)} ${c.statusCode}  ${bold(
+        `logs/${c.base}.md`
+      )}`
     );
   } catch (err) {
     console.error(
@@ -191,22 +201,30 @@ function writeCapture(c: Capture): void {
 // Startup
 // ---------------------------------------------------------------------------
 
+const dim = (text: string) => styleText("dim", text);
+const bold = (text: string) => styleText("bold", text);
+
+/** A field in the banner: a dim label, then the value it describes. */
+function field(label: string, value: string): void {
+  console.log(`  ${dim(label.padEnd(10))} ${value}`);
+}
+
 function printBanner(target: ResolvedTarget): void {
-  const rule = "-".repeat(72);
+  const rule = dim("-".repeat(72));
   console.log("");
   console.log(rule);
-  console.log(`  Agent:     ${target.agentLabel} (${target.providerLabel})`);
-  console.log(`  Listening: http://localhost:${PORT}`);
-  console.log(`  Forwards:  https://${target.upstreamHost}`);
-  console.log(`  Logs:      ${LOG_DIR}`);
+  field("Agent", bold(`${target.agentLabel} (${target.providerLabel})`));
+  field("Listening", `http://localhost:${PORT}`);
+  field("Forwards", `https://${target.upstreamHost}`);
+  field("Logs", dim(LOG_DIR));
   console.log(rule);
 
   for (const file of target.setup) {
     console.log("");
-    console.log(`  Put this in ${file.path}:`);
+    console.log(`  Put this in ${bold(file.path)}:`);
     console.log("");
     for (const line of file.body.split("\n")) {
-      console.log(`      ${line}`);
+      console.log(dim(`      ${line}`));
     }
   }
 
@@ -217,25 +235,35 @@ function printBanner(target: ResolvedTarget): void {
       : "  Run your agent in another terminal with:"
   );
   console.log("");
-  console.log(`      ${target.command}`);
+  console.log(`      ${bold(target.command)}`);
   console.log("");
 
   for (const note of target.notes) printWrapped("Note", note);
   for (const warning of target.warnings) printWrapped("Warning", warning);
 
-  console.log("  Using a different agent now? Run: npm run request-logger -- --force");
+  console.log(
+    dim("  Using a different agent now? Run: npm run request-logger -- --force")
+  );
   console.log(rule);
   console.log("");
+}
+
+/**
+ * Ask the wizard, and keep the answer only if the student asked for it to be
+ * kept. An agent that cannot be logged is never saved, because the wizard does
+ * not offer to remember one.
+ */
+async function ask(): Promise<AgentChoice> {
+  const { choice, remember } = await askChoice();
+  if (remember) saveChoice(STATE_FILE, choice);
+  return choice;
 }
 
 async function main(): Promise<void> {
   const force = process.argv.includes("--force");
 
   let choice = force ? null : loadChoice(STATE_FILE);
-  if (!choice) {
-    choice = await askChoice();
-    saveChoice(STATE_FILE, choice);
-  }
+  if (!choice) choice = await ask();
 
   let resolution = resolveChoice(choice, { port: PORT });
 
@@ -244,8 +272,7 @@ async function main(): Promise<void> {
   if (resolution.kind === "error") {
     console.log("");
     console.log(`[request-logger] ${resolution.message}`);
-    choice = await askChoice();
-    saveChoice(STATE_FILE, choice);
+    choice = await ask();
     resolution = resolveChoice(choice, { port: PORT });
   }
 
@@ -255,21 +282,25 @@ async function main(): Promise<void> {
   }
 
   if (resolution.kind === "refusal") {
-    const rule = "-".repeat(72);
+    const rule = dim("-".repeat(72));
     console.log("");
     console.log(rule);
-    console.log(`  ${resolution.agentLabel} cannot be logged by this tool.`);
+    console.log(`  ${bold(resolution.agentLabel)} cannot be logged by this tool.`);
     console.log(rule);
     console.log("");
     for (const line of wrap(resolution.reason, 68)) console.log(`  ${line}`);
     console.log("");
-    console.log("  This is worth knowing on its own: some tools send the system");
-    console.log("  prompt from your machine, and some build it on their servers.");
-    console.log("  Only the first kind can ever be inspected.");
+    console.log(
+      dim("  This is worth knowing on its own: some tools send the system")
+    );
+    console.log(
+      dim("  prompt from your machine, and some build it on their servers.")
+    );
+    console.log(dim("  Only the first kind can ever be inspected."));
     console.log("");
     console.log("  To follow the lesson, install one of the other agents, then run:");
     console.log("");
-    console.log("      npm run request-logger -- --force");
+    console.log(`      ${bold("npm run request-logger")}`);
     console.log("");
     return;
   }
@@ -283,7 +314,7 @@ async function main(): Promise<void> {
 /** Print a labelled paragraph, indented and wrapped. */
 function printWrapped(label: string, text: string): void {
   const lines = wrap(text, 66);
-  console.log(`  ${label}: ${lines[0] ?? ""}`);
+  console.log(`  ${bold(`${label}:`)} ${lines[0] ?? ""}`);
   for (const line of lines.slice(1)) console.log(`        ${line}`);
   console.log("");
 }

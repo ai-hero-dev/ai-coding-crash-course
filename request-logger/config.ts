@@ -1,5 +1,6 @@
 /**
- * config.ts — asks the student which agent they use, and remembers the answer.
+ * config.ts — asks the student which agent they use, and remembers the answer
+ * only if they ask it to.
  *
  * The saved file holds the choice and nothing else. It never holds a host, a
  * renderer or a command, because those are worked out from the catalogue every
@@ -11,9 +12,15 @@
  */
 
 import fs from "node:fs";
-import readline from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { styleText } from "node:util";
+import { cancel, confirm, isCancel, intro, select } from "@clack/prompts";
 import { listAgents, listProviders, type AgentChoice } from "./agents";
+
+export interface WizardAnswer {
+  choice: AgentChoice;
+  /** True only when the student asked for the choice to be kept. */
+  remember: boolean;
+}
 
 export function loadChoice(file: string): AgentChoice | null {
   try {
@@ -39,55 +46,61 @@ export function saveChoice(file: string, choice: AgentChoice): void {
   }
 }
 
-async function askFromList(
-  rl: readline.Interface,
-  question: string,
-  options: Array<{ id: string; label: string; note?: string }>
-): Promise<string> {
-  console.log("");
-  console.log(question);
-  console.log("");
-  options.forEach((option, i) => {
-    const note = option.note ? `  (${option.note})` : "";
-    console.log(`  ${i + 1}. ${option.label}${note}`);
-  });
-  console.log("");
-
-  while (true) {
-    const answer = (await rl.question(`Enter a number (1-${options.length}): `)).trim();
-    const index = Number(answer);
-    if (Number.isInteger(index) && index >= 1 && index <= options.length) {
-      return options[index - 1].id;
-    }
-    console.log("That is not one of the numbers. Try again.");
+/** Ctrl+C at any prompt leaves without starting a server. */
+function stopIfCancelled<T>(value: T | symbol): T {
+  if (isCancel(value)) {
+    cancel("No problem. Nothing was started, and nothing was saved.");
+    process.exit(0);
   }
+  return value as T;
 }
 
-export async function askChoice(): Promise<AgentChoice> {
-  const rl = readline.createInterface({ input: stdin, output: stdout });
-  try {
-    const agents = listAgents();
-    const agentId = await askFromList(
-      rl,
-      "Which coding agent do you use?",
-      agents.map((agent) => ({
-        id: agent.id,
+export async function askChoice(): Promise<WizardAnswer> {
+  intro(styleText("bold", " request-logger "));
+
+  const agents = listAgents();
+  const agentId = stopIfCancelled(
+    await select({
+      message: "Which coding agent do you use?",
+      options: agents.map((agent) => ({
+        value: agent.id,
         label: agent.label,
-        note: agent.supported ? undefined : "cannot be logged",
-      }))
-    );
+        hint: agent.supported ? undefined : "cannot be logged",
+      })),
+    })
+  );
 
-    const providers = listProviders(agentId);
-    if (providers.length === 0) return { agent: agentId };
+  const agent = agents.find((a) => a.id === agentId);
+  const providers = listProviders(agentId);
 
-    const agentLabel = agents.find((a) => a.id === agentId)?.label ?? agentId;
-    const providerId = await askFromList(
-      rl,
-      `${agentLabel} can use more than one model provider. Which one do you use?`,
-      providers
+  let choice: AgentChoice = { agent: agentId };
+  if (providers.length > 0) {
+    const providerId = stopIfCancelled(
+      await select({
+        message: `${agent?.label ?? agentId} can use more than one model provider. Which one do you use?`,
+        options: providers.map((provider) => ({
+          value: provider.id,
+          label: provider.label,
+        })),
+      })
     );
-    return { agent: agentId, provider: providerId };
-  } finally {
-    rl.close();
+    choice = { agent: agentId, provider: providerId };
   }
+
+  // An agent that cannot be logged is a dead end. Saving it would only make the
+  // student clear the file before they could try a different one, so the
+  // question is not asked at all.
+  if (agent && !agent.supported) return { choice, remember: false };
+
+  const remember = stopIfCancelled(
+    await confirm({
+      message: `Remember this for next time?\n${styleText(
+        "dim",
+        "  Choose no if you regularly swap coding agents."
+      )}`,
+      initialValue: true,
+    })
+  );
+
+  return { choice, remember };
 }
