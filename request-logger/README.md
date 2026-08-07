@@ -19,6 +19,9 @@ more than one model provider, it asks which provider. Last, it asks whether to
 remember your answer. Say no if you swap agents often, and it asks again every
 time. It then prints the exact command for your setup, and starts listening.
 
+It keeps listening until you stop it. Press **Ctrl+C** to stop it. The console
+says so too.
+
 To change a remembered answer:
 
 ```bash

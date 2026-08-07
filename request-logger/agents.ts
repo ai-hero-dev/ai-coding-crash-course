@@ -111,12 +111,6 @@ const CODEX_OVERRIDE_NOTE =
   "command. Keep the quotes exactly as they are: Codex reads the value as TOML, " +
   "and an unquoted URL does not parse.";
 
-const CODEX_WEBSOCKET_WARNING =
-  "Some models prefer a WebSocket. This tool cannot see a WebSocket, so Codex " +
-  "tries one, waits, and then falls back to plain HTTP, which is what you end " +
-  "up reading. The turn still gets logged. It just takes a few seconds longer " +
-  "to start than usual.";
-
 const PI_NOTE =
   "Pi has no base URL variable and no flag. A config file is the only way to " +
   "point it at this tool. Overriding the provider keeps Pi's whole built-in " +
@@ -195,7 +189,6 @@ const AGENTS: AgentEntry[] = [
         bin: "codex",
         args: ["-c", `'openai_base_url="{baseUrl}"'`],
         notes: [CODEX_OVERRIDE_NOTE],
-        warnings: [CODEX_WEBSOCKET_WARNING],
       },
       {
         id: "openai",

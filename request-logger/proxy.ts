@@ -244,6 +244,11 @@ function printBanner(target: ResolvedTarget): void {
   console.log(
     dim("  Using a different agent now? Run: npm run request-logger -- --force")
   );
+  // The tool waits on a port, so nothing tells the student it is finished.
+  // Say how to stop it here, where they are already reading.
+  // The styles are not nested. Both dim and bold close with the same code, so
+  // a bold word inside a dim string ends the dim early.
+  console.log(dim("  Press ") + bold("Ctrl+C") + dim(" to stop logging."));
   console.log(rule);
   console.log("");
 }

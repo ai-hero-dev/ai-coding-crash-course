@@ -367,10 +367,6 @@ describe("resolveChoice — notes and warnings", () => {
     expect(target("claude-code").notes.join(" ")).toContain("ENABLE_TOOL_SEARCH");
   });
 
-  it("warns a Codex student on a subscription about the WebSocket wait", () => {
-    expect(target("codex", "chatgpt").warnings.join(" ")).toContain("WebSocket");
-  });
-
   it("tells a Codex student the flag does not touch their config file", () => {
     expect(target("codex", "openai").notes.join(" ")).toContain("config.toml");
   });
