@@ -359,4 +359,18 @@ describe("renderMarkdown header redaction", () => {
     expect(out).not.toContain("secret-token");
     expect(out).toContain("[REDACTED]");
   });
+
+  it("hides the x-goog-api-key header", () => {
+    const out = renderMarkdown({
+      ...BASE,
+      agent: "Gemini CLI",
+      renderer: "gemini",
+      headers: { "x-goog-api-key": "secret-goog-key" },
+      path: "/v1beta/models/gemini-2.5-pro:generateContent",
+      requestBody: body(GEMINI_REQUEST),
+      responseRaw: "",
+    });
+    expect(out).not.toContain("secret-goog-key");
+    expect(out).toContain("[REDACTED]");
+  });
 });

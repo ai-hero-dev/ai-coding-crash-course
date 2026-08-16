@@ -34,7 +34,12 @@ interface RenderInput {
   responseRaw: string;
 }
 
-const REDACT = new Set(["authorization", "x-api-key", "api-key"]);
+const REDACT = new Set([
+  "authorization",
+  "x-api-key",
+  "api-key",
+  "x-goog-api-key",
+]);
 
 /**
  * Turn the raw request bytes into text.
