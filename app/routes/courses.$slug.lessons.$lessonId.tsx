@@ -65,7 +65,7 @@ const markCompleteSchema = z.object({
   intent: z.literal("mark-complete"),
 });
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.lesson?.title ?? "Lesson";
   const courseTitle = loaderData?.course?.title ?? "Course";
   return [{ title: `${title} — ${courseTitle} — Cadence` }];
