@@ -13,14 +13,16 @@
 
 import fs from "node:fs";
 import { styleText } from "node:util";
-import { cancel, confirm, isCancel, intro, select } from "@clack/prompts";
+import { cancel, confirm, isCancel, intro, select, text } from "@clack/prompts";
 import {
   listAgents,
   listProviders,
   OTHER_ID,
   OTHER_LABEL,
+  localUpstream,
   type AgentChoice,
 } from "./agents";
+import { probeLocalServer, type LocalProbe } from "./local";
 
 export interface WizardAnswer {
   choice: AgentChoice;
@@ -46,6 +48,8 @@ export function loadChoice(file: string): AgentChoice | null {
     return {
       agent: parsed.agent,
       provider: typeof parsed.provider === "string" ? parsed.provider : undefined,
+      localUrl: typeof parsed.localUrl === "string" ? parsed.localUrl : undefined,
+      localModel: typeof parsed.localModel === "string" ? parsed.localModel : undefined,
     };
   } catch {
     return null;
@@ -133,6 +137,53 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
     );
     choice = { agent: agentId, provider: providerId };
     if (providerId === OTHER_ID) return { choice, remember: false };
+  }
+
+  // A local model server lives on the student's machine, so its address is not
+  // in the catalogue. Ask for it, confirm it answers, and pick the model to
+  // use. Without a reachable server there is nothing to forward to, so the
+  // wizard refuses to finish rather than guess.
+  const picked = providers.find((p) => p.id === choice.provider);
+  if (picked?.local) {
+    let probe: LocalProbe = { ok: false, models: [] };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const raw = stopIfCancelled(
+        await text({
+          message: "Address of your local model server",
+          placeholder: "http://127.0.0.1:8000",
+        })
+      );
+      const url = raw.trim();
+      if (url.length === 0) continue;
+      let root: string;
+      try {
+        const { scheme, host, port, prefix } = localUpstream(url);
+        root = `${scheme}://${host}:${port}${prefix}`;
+      } catch (err) {
+        console.error(`  ${styleText("dim", (err as Error).message)}`);
+        continue;
+      }
+      probe = await probeLocalServer(root);
+      if (probe.ok) {
+        choice = { ...choice, localUrl: root, localModel: probe.models[0] };
+        break;
+      }
+      console.error(`  ${styleText("dim", probe.error ?? "could not reach the server")}`);
+    }
+    if (!probe.ok || probe.models.length === 0) {
+      cancel("Could not reach a local model server. Nothing was started.");
+      process.exit(1);
+    }
+    if (probe.models.length > 1) {
+      const model = stopIfCancelled(
+        await select({
+          message: "Which model is that server running?",
+          options: probe.models.map((id) => ({ value: id, label: id })),
+          initialValue: probe.models[0],
+        })
+      );
+      choice = { ...choice, localModel: model };
+    }
   }
 
   // An agent that cannot be logged is a dead end. Saving it would only make the

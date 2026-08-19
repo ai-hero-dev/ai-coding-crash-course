@@ -17,10 +17,20 @@
 
 export type RendererId = "anthropic" | "openai" | "gemini";
 
-/** What the student picked. This, and only this, is what gets saved to disk. */
+/**
+ * What the student picked. This, and only this, is what gets saved to disk.
+ *
+ * The local* fields exist only for a local (locally hosted) model. The wizard
+ * fills them by probing the URL the student types in, so a plain resolveChoice
+ * call with no localUrl on a local provider is an error, not a guess.
+ */
 export interface AgentChoice {
   agent: string;
   provider?: string;
+  /** The address of the student's local model server, e.g. http://127.0.0.1:8000 */
+  localUrl?: string;
+  /** The model id the probe found, or the one the student picked. */
+  localModel?: string;
 }
 
 export interface ResolvedTarget {
@@ -32,6 +42,15 @@ export interface ResolvedTarget {
   /** The single host every request is forwarded to. */
   upstreamHost: string;
   renderer: RendererId;
+  /** Scheme of the upstream. Always https for a cloud provider; http for a local server. */
+  upstreamScheme: "http" | "https";
+  /** Port of the upstream. 443 for a cloud provider; the server's port for a local one. */
+  upstreamPort: number;
+  /**
+   * Path prepended to the received path before forwarding. Empty for a cloud
+   * provider; the student's server subpath for a local one.
+   */
+  upstreamPrefix: string;
   /** The base URL the student points their agent at, e.g. http://localhost:8787/v1 */
   baseUrl: string;
   /** The copy-pasteable command, complete with env vars and flags. */
@@ -103,8 +122,19 @@ export interface SetupFile {
 interface ProviderEntry {
   id: string;
   label: string;
+  /**
+   * The host every request is forwarded to. For a local provider this is a
+   * placeholder; the real host and port come from the student's URL at resolve
+   * time, because they differ per machine.
+   */
   upstreamHost: string;
   renderer: RendererId;
+  /**
+   * True when this provider points at a locally hosted model instead of a cloud
+   * API. The student supplies the server's address; the tool probes it to learn
+   * the wire format and a model to use.
+   */
+  local?: boolean;
   /**
    * Appended to http://localhost:PORT to make the base URL.
    *
@@ -165,6 +195,114 @@ function piModels(providerId: string, baseUrl: string): SetupFile {
       "    }",
       "  }",
       "}",
+    ].join("\n"),
+  };
+}
+
+/**
+ * Oh My Pi's provider override file. Like Pi's, the key is `baseUrl`, in this
+ * exact spelling. Overriding a built-in provider only moves its endpoint; the
+ * whole built-in model list keeps working.
+ */
+function ompModels(providerId: string, baseUrl: string): SetupFile {
+  return {
+    path: "~/.omp/agent/models.yml",
+    language: "yaml",
+    body: ["providers:", `  ${providerId}:`, `    baseUrl: ${baseUrl}`]
+      .join("\n"),
+  };
+}
+
+/**
+ * A locally hosted model server. The student gives the address of the server;
+ * this tool sits between Oh My Pi and that server, and writes a readable
+ * document for every request on the way through.
+ *
+ * Every server we target serves the OpenAI-compatible API under /v1, so this
+ * route uses the same wire as the OpenAI route. The only difference is where
+ * the upstream lives: on the student's machine, over plain http.
+ */
+const LOCAL_NOTE =
+  "This route talks to a model running on your own machine instead of a " +
+  "cloud API. The address is yours, and the model to use is picked from what " +
+  "the server offers. No API key is needed: the server is on your own " +
+  "network, and Oh My Pi is told not to send one. The command pins the main " +
+  "model and the background model to it, so every call stays on your machine " +
+  "and gets captured.";
+
+/**
+ * The parts the tool needs to dial the student's local server. Named rather
+ * than inlined so the contract is importable by the proxy and the tests.
+ */
+export interface LocalUpstream {
+  scheme: "http" | "https";
+  host: string;
+  port: number;
+  /** Path prepended to received paths before forwarding; empty when none. */
+  prefix: string;
+}
+
+/**
+ * Split the student's local server URL into the parts the tool needs to
+ * forward to it.
+ *
+ * Pure: no network, no clock. The same URL always gives the same answer. A
+ * trailing /v1 is stripped, because the OpenAI-compatible API is always under
+ * /v1 relative to the server's root, and the requests already carry it.
+ */
+export function localUpstream(url: string): LocalUpstream {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(
+      `"${url}" is not a URL. Give the address of your local model server, ` +
+        `such as http://127.0.0.1:8000.`
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Your local model server must speak http or https. "${url}" does not.`
+    );
+  }
+  const scheme = parsed.protocol.slice(0, -1) as "http" | "https";
+  const host = parsed.hostname;
+  if (!host) throw new Error(`"${url}" has no host.`);
+  // A URL can leave the port implicit. Make it explicit, because the forwarder
+  // dials the port on its own.
+  const port = parsed.port ? Number(parsed.port) : scheme === "https" ? 443 : 80;
+  let prefix = parsed.pathname.replace(/\/+$/, "");
+  if (prefix.endsWith("/v1")) prefix = prefix.slice(0, -3);
+  return { scheme, host, port, prefix };
+}
+
+/**
+ * Oh My Pi's local model block. A provider that lists models is a full
+ * provider, not an override, so it does not touch any of the built-in
+ * providers. It is also the only way to name a model that is not in the
+ * built-in list.
+ *
+ * `auth: none` tells Oh My Pi to send no key. `api: openai-completions` tells
+ * it to call /chat/completions, the endpoint every local server serves.
+ * `baseUrl` points at this tool, not at the server: the server's address is
+ * told to the tool separately, and the tool forwards to it.
+ */
+function ompLocalModels(modelId: string, proxyBaseUrl: string): SetupFile {
+  return {
+    path: "~/.omp/agent/models.yml",
+    language: "yaml",
+    body: [
+      "providers:",
+      "  local:",
+      "    baseUrl:",
+      `      ${proxyBaseUrl}`,
+      "    auth: none",
+      "    api: openai-completions",
+      "    models:",
+      "      - id:",
+      `        ${modelId}`,
+      "        name: Local",
+      "        api: openai-completions",
     ].join("\n"),
   };
 }
@@ -414,6 +552,85 @@ const AGENTS: AgentEntry[] = [
     ],
   },
   {
+    id: "omp",
+    label: "Oh My Pi",
+    providers: [
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        upstreamHost: "api.anthropic.com",
+        renderer: "anthropic",
+        env: [["ANTHROPIC_BASE_URL", "{baseUrl}"]],
+        bin: "omp",
+        notes: [
+          "One variable, no config file. It works with an Anthropic API key " +
+            "and with a Claude subscription login; your login stays active, " +
+            "only the model traffic moves.",
+          "The variable lasts for the run it is printed in. Nothing is " +
+            "written to any file, so your normal Oh My Pi is unchanged the " +
+            "moment you stop using this command.",
+          "Oh My Pi also makes small background calls with a smaller model, " +
+            "such as titling a session. When that model runs on this " +
+            "provider, each turn writes a few extra small captures alongside " +
+            "the real one. That is what the agent really sends.",
+        ],
+      },
+      {
+        id: "openai",
+        label: "OpenAI API key",
+        upstreamHost: "api.openai.com",
+        renderer: "openai",
+        // omp's OpenAI transport appends only /responses, so the base URL has
+        // to carry the /v1.
+        suffix: "/v1",
+        bin: "omp",
+        setup: [ompModels("openai", "{baseUrl}")],
+        notes: [
+          "Oh My Pi has no base URL variable on this route. Overriding the " +
+            "provider in its models file is the only way to point it at this " +
+            "tool, and it keeps the agent's whole built-in model list. If " +
+            "that file already exists, add this provider to it rather than " +
+            "replacing it, or your other providers disappear.",
+        ],
+      },
+      {
+        id: "codex",
+        label: "ChatGPT subscription",
+        upstreamHost: "chatgpt.com",
+        renderer: "openai",
+        // omp appends `/codex/responses` itself, and the real endpoint sits
+        // under `/backend-api`, so the base URL must carry that prefix.
+        suffix: "/backend-api",
+        env: [["PI_CODEX_WEBSOCKET", "false"]],
+        bin: "omp",
+        setup: [ompModels("openai-codex", "{baseUrl}")],
+        notes: [
+          "The flag and the file do different jobs. The file moves the " +
+            "endpoint; the flag stops Oh My Pi opening a WebSocket, which " +
+            "this tool cannot see. With the flag it streams over HTTP, so " +
+            "every turn is captured. It works with a ChatGPT subscription " +
+            "login.",
+          "If the models file already exists, add this provider to it rather " +
+            "than replacing it.",
+        ],
+      },
+      {
+        id: "local",
+        label: "Local model (Ollama, vLLM, LM Studio, …)",
+        // Placeholder. The real host and port come from the student's URL at
+        // resolve time; a local server lives on their machine.
+        upstreamHost: "127.0.0.1",
+        renderer: "openai",
+        local: true,
+        // omp's openai-completions transport appends only /chat/completions, so
+        // the base URL has to carry the /v1.
+        suffix: "/v1",
+        bin: "omp",
+        notes: [LOCAL_NOTE],
+      },
+    ],
+  },
+  {
     id: "gemini",
     label: "Gemini CLI",
     providers: [
@@ -472,6 +689,8 @@ export interface AgentSummary {
 export interface ProviderSummary {
   id: string;
   label: string;
+  /** True when picking this provider asks for the address of a local server. */
+  local: boolean;
 }
 
 /**
@@ -499,7 +718,11 @@ export function listAgents(): AgentSummary[] {
 export function listProviders(agentId: string): ProviderSummary[] {
   const agent = AGENTS.find((a) => a.id === agentId);
   if (!agent?.providers || agent.providers.length < 2) return [];
-  return agent.providers.map((p) => ({ id: p.id, label: p.label }));
+  return agent.providers.map((p) => ({
+    id: p.id,
+    label: p.label,
+    local: !!p.local,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +835,48 @@ export function resolveChoice(
 
   const baseUrl = `http://localhost:${options.port}${provider.suffix ?? ""}`;
 
+  // A local model server lives on the student's machine, so its host and port
+  // are not in the catalogue. They come from the URL the student gave the
+  // wizard. Without that URL there is nothing to forward to, so this is an
+  // error, not a guess.
+  if (provider.local) {
+    if (!choice.localUrl) {
+      return {
+        kind: "error",
+        message:
+          `${agent.label} on a local model needs the address of your local ` +
+          `model server. Run with --force and enter it when asked.`,
+      };
+    }
+    let up: LocalUpstream;
+    try {
+      up = localUpstream(choice.localUrl);
+    } catch (err) {
+      return { kind: "error", message: (err as Error).message };
+    }
+    const modelId = choice.localModel ?? "local";
+    return {
+      kind: "target",
+      agent: agent.id,
+      agentLabel: agent.label,
+      provider: provider.id,
+      providerLabel: provider.label,
+      upstreamHost: up.host,
+      upstreamScheme: up.scheme,
+      upstreamPort: up.port,
+      upstreamPrefix: up.prefix,
+      renderer: provider.renderer,
+      baseUrl,
+      // The model is addressed as local/<id>: `local` is the provider id in
+      // the models file, and <id> is the model the server offers. The smol
+      // role is pinned to the same model so background calls stay local too.
+      command: `omp --model local/${modelId} --smol local/${modelId}`,
+      setup: [ompLocalModels(modelId, baseUrl)],
+      notes: provider.notes ?? [],
+      warnings: provider.warnings ?? [],
+    };
+  }
+
   return {
     kind: "target",
     agent: agent.id,
@@ -619,6 +884,9 @@ export function resolveChoice(
     provider: provider.id,
     providerLabel: provider.label,
     upstreamHost: provider.upstreamHost,
+    upstreamScheme: "https",
+    upstreamPort: 443,
+    upstreamPrefix: "",
     renderer: provider.renderer,
     baseUrl,
     command: buildCommand(provider, baseUrl),

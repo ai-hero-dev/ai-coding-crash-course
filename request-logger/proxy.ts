@@ -88,42 +88,48 @@ function handle(
     const base = baseName(target);
     const encoding = req.headers["content-encoding"];
 
-    const upstreamReq = https.request(
-      {
-        hostname: target.upstreamHost,
-        port: 443,
-        path: reqPath,
-        method: req.method,
-        headers: {
-          ...forwardHeaders(req.headers, body),
-          host: target.upstreamHost,
-        },
+    // The upstream is https for a cloud provider and plain http for a local
+    // model server. Dial the scheme and port the catalogue told us, and
+    // prepend the server's subpath so a server that lives under a prefix
+    // still sees the request where it expects it.
+    const opts: http.RequestOptions = {
+      hostname: target.upstreamHost,
+      port: target.upstreamPort,
+      path: target.upstreamPrefix + reqPath,
+      method: req.method,
+      headers: {
+        ...forwardHeaders(req.headers, body),
+        host: target.upstreamHost,
       },
-      (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-        const responseChunks: Buffer[] = [];
-        upstreamRes.on("data", (chunk: Buffer) => {
-          responseChunks.push(chunk);
-          res.write(chunk); // stream straight back to the agent, unbuffered
+    };
+    const cb = (upstreamRes: http.IncomingMessage): void => {
+      res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      const responseChunks: Buffer[] = [];
+      upstreamRes.on("data", (chunk: Buffer) => {
+        responseChunks.push(chunk);
+        res.write(chunk); // stream straight back to the agent, unbuffered
+      });
+      upstreamRes.on("end", () => {
+        res.end();
+        const responseRaw = Buffer.concat(responseChunks).toString("utf8");
+        writeCapture({
+          base,
+          target,
+          timestamp,
+          method: req.method ?? "POST",
+          path: reqPath,
+          statusCode: upstreamRes.statusCode ?? 0,
+          headers: req.headers,
+          requestBody: body,
+          requestEncoding: Array.isArray(encoding) ? encoding[0] : encoding,
+          responseRaw,
         });
-        upstreamRes.on("end", () => {
-          res.end();
-          const responseRaw = Buffer.concat(responseChunks).toString("utf8");
-          writeCapture({
-            base,
-            target,
-            timestamp,
-            method: req.method ?? "POST",
-            path: reqPath,
-            statusCode: upstreamRes.statusCode ?? 0,
-            headers: req.headers,
-            requestBody: body,
-            requestEncoding: Array.isArray(encoding) ? encoding[0] : encoding,
-            responseRaw,
-          });
-        });
-      }
-    );
+      });
+    };
+    const upstreamReq =
+      target.upstreamScheme === "https"
+        ? https.request(opts, cb)
+        : http.request(opts, cb);
 
     upstreamReq.on("error", (err) => {
       console.error(`[request-logger] upstream error: ${err.message}`);
@@ -209,13 +215,22 @@ function field(label: string, value: string): void {
   console.log(`  ${dim(label.padEnd(10))} ${value}`);
 }
 
+/** Where the tool forwards: the scheme and port the catalogue told us. */
+function forwardsAddress(target: ResolvedTarget): string {
+  const port =
+    (target.upstreamScheme === "https" ? 443 : 80) === target.upstreamPort
+      ? ""
+      : `:${target.upstreamPort}`;
+  return `${target.upstreamScheme}://${target.upstreamHost}${port}`;
+}
+
 function printBanner(target: ResolvedTarget): void {
   const rule = dim("-".repeat(72));
   console.log("");
   console.log(rule);
   field("Agent", bold(`${target.agentLabel} (${target.providerLabel})`));
   field("Listening", `http://localhost:${PORT}`);
-  field("Forwards", `https://${target.upstreamHost}`);
+  field("Forwards", forwardsAddress(target));
   field("Logs", dim(LOG_DIR));
   console.log(rule);
 

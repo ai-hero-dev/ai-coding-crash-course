@@ -3,6 +3,7 @@ import {
   ISSUE_URL,
   listAgents,
   listProviders,
+  localUpstream,
   OTHER_ID,
   resolveChoice,
   shouldLogRequest,
@@ -67,6 +68,7 @@ describe("listAgents", () => {
       "copilot",
       "opencode",
       "pi",
+      "omp",
       "gemini",
       "cursor",
       "amp",
@@ -126,6 +128,15 @@ describe("listProviders", () => {
   it("leads Pi with the Anthropic route, which is the simplest", () => {
     expect(listProviders("pi")[0].id).toBe("anthropic");
   });
+
+  it("returns all four Oh My Pi providers, local last", () => {
+    expect(listProviders("omp").map((p) => p.id)).toEqual([
+      "anthropic",
+      "openai",
+      "codex",
+      "local",
+    ]);
+  });
 });
 
 describe("resolveChoice — upstream hosts", () => {
@@ -167,6 +178,18 @@ describe("resolveChoice — upstream hosts", () => {
 
   it("does not send Pi on a ChatGPT subscription to the OpenAI host", () => {
     expect(target("pi", "codex").upstreamHost).not.toBe("api.openai.com");
+  });
+
+  it("sends Oh My Pi on Anthropic to Anthropic", () => {
+    expect(target("omp", "anthropic").upstreamHost).toBe("api.anthropic.com");
+  });
+
+  it("sends Oh My Pi on OpenAI to OpenAI", () => {
+    expect(target("omp", "openai").upstreamHost).toBe("api.openai.com");
+  });
+
+  it("sends Oh My Pi on a ChatGPT subscription to the ChatGPT host", () => {
+    expect(target("omp", "codex").upstreamHost).toBe("chatgpt.com");
   });
 
   it("sends Gemini on an API key to the public API host", () => {
@@ -214,6 +237,15 @@ describe("resolveChoice — renderers", () => {
     expect(target("pi", "codex").renderer).toBe("openai");
   });
 
+  it("reads Oh My Pi on Anthropic with the Anthropic renderer", () => {
+    expect(target("omp", "anthropic").renderer).toBe("anthropic");
+  });
+
+  it("reads both Oh My Pi OpenAI routes with the OpenAI renderer", () => {
+    expect(target("omp", "openai").renderer).toBe("openai");
+    expect(target("omp", "codex").renderer).toBe("openai");
+  });
+
   it("reads both Gemini routes with the Gemini renderer", () => {
     expect(target("gemini", "api-key").renderer).toBe("gemini");
     expect(target("gemini", "google-login").renderer).toBe("gemini");
@@ -247,6 +279,20 @@ describe("resolveChoice — base URLs", () => {
     // Pi appends /codex/responses itself, and the real endpoint sits under
     // /backend-api. Without the suffix the forwarded path loses that segment.
     expect(target("pi", "codex").baseUrl).toBe("http://localhost:8787/backend-api");
+  });
+
+  it("gives Oh My Pi on Anthropic no suffix, because its SDK adds /v1/messages", () => {
+    expect(target("omp", "anthropic").baseUrl).toBe("http://localhost:8787");
+  });
+
+  it("gives Oh My Pi on OpenAI the /v1 suffix, because that transport adds only /responses", () => {
+    expect(target("omp", "openai").baseUrl).toBe("http://localhost:8787/v1");
+  });
+
+  it("gives Oh My Pi on a ChatGPT subscription the /backend-api suffix", () => {
+    // omp appends /codex/responses itself, and the real endpoint sits under
+    // /backend-api. Without the suffix the forwarded path loses that segment.
+    expect(target("omp", "codex").baseUrl).toBe("http://localhost:8787/backend-api");
   });
 
   it("uses the port it is given", () => {
@@ -341,6 +387,24 @@ describe("resolveChoice — commands", () => {
   it("gives Pi a bare command, because Pi has no base URL variable", () => {
     expect(target("pi", "anthropic").command).toBe("pi");
   });
+
+  it("sets the base URL for Oh My Pi with its Anthropic variable", () => {
+    expect(target("omp", "anthropic").command).toBe(
+      "ANTHROPIC_BASE_URL=http://localhost:8787 omp"
+    );
+  });
+
+  it("gives Oh My Pi on OpenAI a bare command, because there is no variable on that route", () => {
+    expect(target("omp", "openai").command).toBe("omp");
+  });
+
+  it("forces Oh My Pi's Codex route onto SSE and keeps the endpoint out of the command", () => {
+    // The endpoint comes from the models file, so the command must not carry
+    // a base URL.
+    const command = target("omp", "codex").command;
+    expect(command).toBe("PI_CODEX_WEBSOCKET=false omp");
+    expect(command).not.toContain("http://localhost:8787");
+  });
 });
 
 describe("resolveChoice — setup files", () => {
@@ -399,6 +463,33 @@ describe("resolveChoice — setup files", () => {
 
   it("gives Pi on Anthropic only one file to write", () => {
     expect(target("pi", "anthropic").setup).toHaveLength(1);
+  });
+
+  it("gives Oh My Pi on Anthropic no file to write, because the variable does the job", () => {
+    expect(target("omp", "anthropic").setup).toEqual([]);
+  });
+
+  it("gives Oh My Pi its models file on the OpenAI route", () => {
+    expect(target("omp", "openai").setup[0].path).toBe("~/.omp/agent/models.yml");
+    expect(target("omp", "openai").setup[0].body).toContain(
+      "baseUrl: http://localhost:8787/v1"
+    );
+    expect(target("omp", "openai").setup[0].body).toContain("openai");
+  });
+
+  it("gives Oh My Pi its models file on the Codex route, naming the hyphenated provider", () => {
+    const body = target("omp", "codex").setup[0].body;
+    expect(target("omp", "codex").setup[0].path).toBe("~/.omp/agent/models.yml");
+    expect(body).toContain("baseUrl: http://localhost:8787/backend-api");
+    expect(body).toContain("openai-codex");
+  });
+
+  it("does not put a transport in the Oh My Pi models file, where it would mean the auth gateway", () => {
+    expect(target("omp", "codex").setup[0].body).not.toContain("transport");
+  });
+
+  it("gives Oh My Pi only one file on the OpenAI route", () => {
+    expect(target("omp", "openai").setup).toHaveLength(1);
   });
 });
 
@@ -497,6 +588,12 @@ describe("shouldLogRequest", () => {
     expect(shouldLogRequest("POST", "/v1/responses", "openai")).toBe(true);
   });
 
+  it("logs a real Codex turn on the backend-api path", () => {
+    expect(
+      shouldLogRequest("POST", "/backend-api/codex/responses", "openai")
+    ).toBe(true);
+  });
+
   it("logs a streaming Gemini turn", () => {
     expect(
       shouldLogRequest(
@@ -577,5 +674,143 @@ describe("resolveChoice — bad input", () => {
   it("points the student at --force when a choice cannot be resolved", () => {
     const result = resolveChoice({ agent: "nonesuch" }, PORT);
     expect(result.kind === "error" && result.message).toContain("--force");
+  });
+});
+
+describe("localUpstream", () => {
+  it("parses a plain localhost address", () => {
+    expect(localUpstream("http://127.0.0.1:8000")).toEqual({
+      scheme: "http",
+      host: "127.0.0.1",
+      port: 8000,
+      prefix: "",
+    });
+  });
+
+  it("strips a trailing /v1, because the requests already carry it", () => {
+    expect(localUpstream("http://127.0.0.1:8000/v1")).toEqual({
+      scheme: "http",
+      host: "127.0.0.1",
+      port: 8000,
+      prefix: "",
+    });
+  });
+
+  it("keeps a server subpath as the forward prefix", () => {
+    expect(localUpstream("http://127.0.0.1:8000/my-model")).toEqual({
+      scheme: "http",
+      host: "127.0.0.1",
+      port: 8000,
+      prefix: "/my-model",
+    });
+  });
+
+  it("defaults the port from the scheme when none is given", () => {
+    expect(localUpstream("http://localhost").port).toBe(80);
+    expect(localUpstream("https://localhost").port).toBe(443);
+  });
+
+  it("reports the scheme", () => {
+    expect(localUpstream("https://127.0.0.1:8443").scheme).toBe("https");
+    expect(localUpstream("http://127.0.0.1:8000").scheme).toBe("http");
+  });
+
+  it("rejects something that is not a URL", () => {
+    expect(() => localUpstream("127.0.0.1:8000")).toThrow();
+  });
+
+  it("rejects a scheme a local model server does not speak", () => {
+    expect(() => localUpstream("ftp://127.0.0.1:8000")).toThrow();
+  });
+});
+
+describe("resolveChoice — local model", () => {
+  it("reads a local model with the OpenAI renderer, because that is the wire", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "http://127.0.0.1:8000", localModel: "llama3" },
+      PORT
+    );
+    if (result.kind !== "target") throw new Error(`got ${result.kind}`);
+    expect(result.renderer).toBe("openai");
+  });
+
+  it("dials the student's server, not a cloud host", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "http://127.0.0.1:8000", localModel: "llama3" },
+      PORT
+    );
+    if (result.kind !== "target") throw new Error(`got ${result.kind}`);
+    expect(result.upstreamHost).toBe("127.0.0.1");
+    expect(result.upstreamPort).toBe(8000);
+    expect(result.upstreamScheme).toBe("http");
+    expect(result.upstreamPrefix).toBe("");
+  });
+
+  it("carries a server subpath in the forward prefix", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "http://127.0.0.1:8000/my-model", localModel: "llama3" },
+      PORT
+    );
+    if (result.kind !== "target") throw new Error(`got ${result.kind}`);
+    expect(result.upstreamPrefix).toBe("/my-model");
+  });
+
+  it("keeps the base URL on the tool, not the server", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "http://127.0.0.1:8000", localModel: "llama3" },
+      PORT
+    );
+    if (result.kind !== "target") throw new Error(`got ${result.kind}`);
+    expect(result.baseUrl).toBe("http://localhost:8787/v1");
+  });
+
+  it("pins the model and the background model to the local one", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "http://127.0.0.1:8000", localModel: "llama3" },
+      PORT
+    );
+    if (result.kind !== "target") throw new Error(`got ${result.kind}`);
+    expect(result.command).toBe("omp --model local/llama3 --smol local/llama3");
+  });
+
+  it("writes a local provider that lists the chosen model and no key", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "http://127.0.0.1:8000", localModel: "llama3" },
+      PORT
+    );
+    if (result.kind !== "target") throw new Error(`got ${result.kind}`);
+    const file = result.setup[0];
+    expect(file.path).toBe("~/.omp/agent/models.yml");
+    expect(file.body).toContain("baseUrl:");
+    expect(file.body).toContain("http://localhost:8787/v1");
+    expect(file.body).toContain("auth: none");
+    expect(file.body).toContain("api: openai-completions");
+    expect(file.body).toContain("llama3");
+  });
+
+  it("is an error without the server address, because there is nothing to guess", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localModel: "llama3" },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+  });
+
+  it("is an error when the address is not a URL", () => {
+    const result = resolveChoice(
+      { agent: "omp", provider: "local", localUrl: "not a url", localModel: "llama3" },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+  });
+});
+
+describe("shouldLogRequest — local model", () => {
+  it("logs a local turn on the OpenAI wire", () => {
+    expect(shouldLogRequest("POST", "/v1/chat/completions", "openai")).toBe(true);
+  });
+
+  it("does not log the model discovery probe", () => {
+    expect(shouldLogRequest("GET", "/v1/models", "openai")).toBe(false);
   });
 });

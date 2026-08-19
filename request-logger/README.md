@@ -58,6 +58,7 @@ from this table. It is here so you can see what is supported before you start.
 | GitHub Copilot   | Yes   | Your normal subscription login.                  |
 | OpenCode         | Yes   | One command, or a config file.                   |
 | Pi               | Yes   | A config file. Pi has no base URL variable.      |
+| Oh My Pi         | Yes   | One command, or a config file plus a flag.       |
 | Gemini CLI       | Yes   | One command. The free Google login works.        |
 | Cursor CLI       | No    | Nothing can make it work. See below.             |
 | Amp              | No    | Nothing can make it work. See below.             |
@@ -158,6 +159,10 @@ Different agents fan out differently, and that is worth watching:
 - **OpenCode** never counts tokens. Instead it makes a second call with a small
   model to title the thread, so one turn writes exactly two captures.
 - **Pi** never counts tokens at all, so every file is a real turn.
+- **Oh My Pi** never counts tokens at all, so every file is a real turn. It
+  does make small background calls with a smaller model, such as titling a
+  session, and when that model runs on the chosen provider each turn writes a
+  few extra small captures alongside the real one.
 - **Gemini** on the free Google login makes several extra calls that carry no
   prompt. Those are not logged either.
 

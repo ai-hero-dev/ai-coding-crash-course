@@ -27,6 +27,20 @@ describe("the remembered answer", () => {
     expect(loadChoice(file)).toEqual({ agent: "claude-code", provider: undefined });
   });
 
+  it("reads back a local model choice with its server and model", () => {
+    // The wizard stores the address and model of the student's local server.
+    // Losing either on a re-read would make the tool ask again or forward to
+    // nothing, so the round-trip must keep both.
+    const choice = {
+      agent: "omp",
+      provider: "local",
+      localUrl: "http://127.0.0.1:8000",
+      localModel: "llama3-8b",
+    };
+    saveChoice(file, choice);
+    expect(loadChoice(file)).toEqual(choice);
+  });
+
   it("reports no answer when the file is not there", () => {
     expect(loadChoice(file)).toBeNull();
   });
