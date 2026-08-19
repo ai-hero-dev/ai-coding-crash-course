@@ -163,6 +163,94 @@ describe("renderMarkdown for OpenAI", () => {
 });
 
 // ---------------------------------------------------------------------------
+// "raw" — the explicit fallback for a custom target with no known wire format
+// ---------------------------------------------------------------------------
+
+describe('renderMarkdown for the "raw" renderer', () => {
+  // Deliberately shaped like an OpenAI /responses request, so a test failure
+  // here would show the bug this renderer exists to prevent: "raw" quietly
+  // falling through to the OpenAI parser instead of the generic JSON dump.
+  const request = {
+    model: "some-local-model",
+    instructions: "You are a careful assistant.",
+    input: [{ type: "message", role: "user", content: "hello" }],
+  };
+
+  const out = renderMarkdown({
+    ...BASE,
+    agent: "OMP",
+    renderer: "raw",
+    path: "/v1/chat/completions",
+    requestBody: body(request),
+    responseRaw: JSON.stringify({ choices: [{ message: { content: "hi" } }] }),
+  });
+
+  it("dumps the request as plain JSON, not through the OpenAI parser", () => {
+    expect(out).not.toContain("<system-prompt>");
+    expect(out).not.toContain("<messages>");
+  });
+
+  it("still shows the request content somewhere in the JSON dump", () => {
+    expect(out).toContain("You are a careful assistant.");
+  });
+
+  it("dumps a non-streaming response as plain JSON, not through the OpenAI parser", () => {
+    expect(out).not.toContain("<assistant-text>");
+    expect(out).toContain('"content": "hi"');
+  });
+
+  it("still finds the model name, because that reading does not depend on the renderer", () => {
+    expect(out).toContain("**model**: some-local-model");
+  });
+
+  it("dumps each SSE event as its own JSON block instead of reconstructing assistant text", () => {
+    const streamed = renderMarkdown({
+      ...BASE,
+      agent: "OMP",
+      renderer: "raw",
+      path: "/v1/chat/completions",
+      requestBody: body(request),
+      responseRaw:
+        'data: {"choices":[{"delta":{"content":"hi"}}]}\n' +
+        'data: {"choices":[{"delta":{"content":" there"}}]}\n',
+    });
+    expect(streamed).not.toContain("<assistant-text>");
+    expect(streamed).toContain('"content": "hi"');
+    expect(streamed).toContain('"content": " there"');
+  });
+
+  it("falls back to the untouched raw text for a stream it cannot parse at all", () => {
+    // Stands in for Ollama's NDJSON: bare JSON objects, one per line, with no
+    // `data:` prefix — genuinely different from SSE, and out of scope here.
+    // The one promise this renderer makes for that shape is "not broken".
+    const ndjson =
+      '{"model":"llama3","message":{"content":"hi"}}\n' +
+      '{"model":"llama3","message":{"content":" there"},"done":true}\n';
+    const out = renderMarkdown({
+      ...BASE,
+      agent: "OMP",
+      renderer: "raw",
+      path: "/api/chat",
+      requestBody: body(request),
+      responseRaw: ndjson,
+    });
+    expect(out).toContain('"content":"hi"');
+  });
+
+  it("does not treat an unparseable body as raw JSON, and falls back to raw text", () => {
+    const out = renderMarkdown({
+      ...BASE,
+      agent: "OMP",
+      renderer: "raw",
+      path: "/v1/chat/completions",
+      requestBody: Buffer.from("not json at all"),
+      responseRaw: "",
+    });
+    expect(out).toContain("not json at all");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Gemini
 // ---------------------------------------------------------------------------
 

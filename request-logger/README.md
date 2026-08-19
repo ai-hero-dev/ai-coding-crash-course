@@ -14,16 +14,33 @@ goes over the wire.
 npm run request-logger
 ```
 
-The first time you run it, it asks which agent you use. If your agent can drive
-more than one model provider, it asks which provider. Last, it asks whether to
-remember your answer. Say no if you swap agents often, and it asks again every
-time. It then prints the exact command for your setup, and starts listening.
+The first time you run it, it asks which agent you use, then which model
+provider you use with it. (OMP is the one exception: it has no fixed provider
+of its own, so it skips straight to the base URL question below.) Last, it
+asks whether to remember your answer. Say no if you swap agents often, and it
+asks again every time. It then prints the exact command for your setup, and
+starts listening.
 
 It keeps listening until you stop it. Press **Ctrl+C** to stop it. The console
 says so too.
 
 Both questions end with **Other, or not sure**. Pick it if your setup is not in
 the list, and the tool gives you a link to ask for it.
+
+The provider question has a second way out, too: **Custom base URL**. Pick it
+if your provider is not in the list but you know its base URL — a local model
+server such as Ollama, or a smaller hosted provider such as DeepSeek, say. It
+asks two questions instead of showing you a dead end:
+
+- the base URL of the model server you want to log, for example
+  `http://localhost:11434` for Ollama, or `https://api.deepseek.com` for
+  DeepSeek; and
+- which wire format it speaks — OpenAI-compatible, Anthropic-compatible, or
+  "not sure", if you do not know.
+
+If you are not sure, pick "not sure". The tool still logs everything; it just
+shows you the raw JSON instead of a fully readable render, because it cannot
+safely guess a shape you did not tell it. See "What you get" below.
 
 To change a remembered answer:
 
@@ -46,6 +63,12 @@ gitignored. It holds your choice only. The host, the renderer and the command ar
 worked out again on every start, so an update to this tool reaches you without
 you having to clear anything.
 
+The one exception is a **Custom base URL** answer. There is no catalogue entry
+for it to be worked out from — you typed it — so the base URL and the wire
+format you chose are saved in the file too, alongside your choice. Everything
+else about a custom answer still behaves the same way: change it any time with
+`--force`, and it is never kept for an agent that cannot be logged.
+
 ## The agents
 
 The tool prints the correct command for you, so you do not have to copy anything
@@ -58,9 +81,14 @@ from this table. It is here so you can see what is supported before you start.
 | GitHub Copilot   | Yes   | Your normal subscription login.                  |
 | OpenCode         | Yes   | One command, or a config file.                   |
 | Pi               | Yes   | A config file. Pi has no base URL variable.      |
+| OMP              | Yes   | A YAML config file. Point it at any backend.     |
 | Gemini CLI       | Yes   | One command. The free Google login works.        |
 | Cursor CLI       | No    | Nothing can make it work. See below.             |
 | Amp              | No    | Nothing can make it work. See below.             |
+
+Any other provider — a local model server, or a smaller hosted one — works
+through **Custom base URL**, above, on any agent in this table except Cursor
+and Amp.
 
 ### Why Cursor and Amp cannot work
 
@@ -119,6 +147,13 @@ The `.md` file uses **XML tags** (`<request>`, `<system-prompt>`, `<tools>`,
 `<messages>`, `<response>`) to mark its sections, because the captured content is
 full of its own Markdown headings. It is complete and not truncated, so it is a
 trustworthy readout of what the model received.
+
+If you picked "not sure" for a custom base URL's wire format, the `.md` file
+holds pretty-printed JSON instead of that fully tagged render — there is no
+system prompt or tool section, because the tool was not told the shape needed
+to find them. Nothing is lost: it is still the whole request and response, just
+less readable. Run with `--force` and pick the real wire format once you know
+it, and the tagged render takes over from the next request.
 
 Secret headers (`authorization`, `x-api-key`, `api-key`) are hidden in the `.md`
 file and are never written to the `.txt` files.
@@ -187,10 +222,15 @@ of these happened:
 
 Be fair to the tool when you judge a failure.
 
-- **Claude Code is tested end to end.** The measurements above are real.
+- **Claude Code and OMP are tested end to end.** The measurements above are
+  real, and OMP is run daily by the person who built this tool.
 - **The others were verified** by reading the published code of each agent and
   by driving them against a local listener. They were not each run through a
   full course of the lesson.
+- **A custom base URL is only as tested as the agent it is attached to.** The
+  base URL and wire format mechanism itself is tested directly (see
+  `agents.test.ts`); a specific third-party server behind it has not
+  necessarily been driven end to end.
 
 If one of them is wrong, it is worth reporting, and the fix is likely to be one
 line in `agents.ts`.
@@ -201,6 +241,11 @@ line in `agents.ts`.
   upstream host, its renderer, its base URL suffix, and its command. That is the
   whole job. The wizard, the banner and the routing all read from there, so
   nothing else needs to change.
+- **Add an agent with no fixed upstream at all**, the way OMP has none: give it
+  no upstream host, set `alwaysCustom: true`, and give its one provider entry a
+  bin and a setup file. The wizard then skips the provider question for it
+  entirely and asks the two custom-base-url questions directly. See the OMP
+  entry in `agents.ts` for the whole shape.
 - **Add a wire format:** add a renderer in `render.ts` and name it on the
   catalogue entry. Unknown shapes already fall back to pretty-printed JSON, so
   you can iterate safely.
@@ -208,3 +253,6 @@ line in `agents.ts`.
   rule. Some agents append the whole path to what you give them and so must not
   have a `/v1`. Some append only the last part and so must have one. Getting it
   wrong produces a 404 that is hard to read. There is a test for each one.
+- **Nothing to do for a student on an unlisted provider.** "Custom base URL" at
+  the provider question already covers that — see the top of this README. It
+  is not a per-agent thing to add; every supported agent gets it for free.
