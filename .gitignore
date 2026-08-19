@@ -17,6 +17,9 @@
 # JetBrains
 /.idea/
 
+# VS Code
+.vscode/
+
 # request-logger captured logs (may contain your own code/prompts)
 /request-logger/logs/*
 !/request-logger/logs/.gitkeep
