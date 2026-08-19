@@ -747,7 +747,13 @@ function parseUpstreamUrl(raw: string): URL | null {
  * one is used regardless of the wire format chosen: it is a best-effort
  * template, not a promise, and a mismatch is worth a note, not a dead end.
  * An agent with more than one provider picks by matching the chosen wire
- * format against each provider's `customTemplateFor` tags.
+ * format against each provider's `customTemplateFor` tags — and only that:
+ * an untagged provider is untagged on purpose (see the field's own doc,
+ * above), so a format with no exact match returns `undefined` rather than
+ * borrowing an unrelated provider's command. `resolveCustomTarget` already
+ * degrades honestly when this returns nothing — a bare command, no setup
+ * file, no borrowed notes — which is the correct outcome here, not a bug to
+ * paper over.
  */
 function findCustomTemplate(
   agent: AgentEntry,
@@ -755,10 +761,7 @@ function findCustomTemplate(
 ): ProviderEntry | undefined {
   const providers = agent.providers ?? [];
   if (providers.length <= 1) return providers[0];
-  return (
-    providers.find((p) => p.customTemplateFor?.includes(renderer)) ??
-    providers.find((p) => (p.customTemplateFor?.length ?? 0) > 0)
-  );
+  return providers.find((p) => p.customTemplateFor?.includes(renderer));
 }
 
 /**
