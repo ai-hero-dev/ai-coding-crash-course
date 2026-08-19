@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+  agentProviders,
+  CUSTOM_ID,
   ISSUE_URL,
   listAgents,
   listProviders,
   OTHER_ID,
   resolveChoice,
   shouldLogRequest,
+  type AgentChoice,
 } from "./agents";
 
 const PORT = { port: 8787 };
@@ -17,6 +20,15 @@ function target(agent: string, provider?: string) {
     throw new Error(
       `expected a target for ${agent}/${provider}, got ${result.kind}`
     );
+  }
+  return result;
+}
+
+/** Resolve a custom-base-url choice, and fail loudly if it was not a usable target. */
+function customTarget(choice: AgentChoice) {
+  const result = resolveChoice(choice, PORT);
+  if (result.kind !== "custom-target") {
+    throw new Error(`expected a custom-target, got ${result.kind}`);
   }
   return result;
 }
@@ -67,6 +79,7 @@ describe("listAgents", () => {
       "copilot",
       "opencode",
       "pi",
+      "omp",
       "gemini",
       "cursor",
       "amp",
@@ -97,6 +110,26 @@ describe("listAgents", () => {
     const opencode = listAgents().find((agent) => agent.id === "opencode");
     expect(opencode?.needsProvider).toBe(true);
   });
+
+  it("marks OMP as supported", () => {
+    const omp = listAgents().find((agent) => agent.id === "omp");
+    expect(omp?.supported).toBe(true);
+  });
+
+  it("marks OMP as always custom", () => {
+    const omp = listAgents().find((agent) => agent.id === "omp");
+    expect(omp?.alwaysCustom).toBe(true);
+  });
+
+  it("says no other agent is always custom", () => {
+    const others = listAgents().filter((agent) => agent.id !== "omp");
+    expect(others.every((agent) => agent.alwaysCustom === false)).toBe(true);
+  });
+
+  it("says OMP needs no provider question, because it never shows one", () => {
+    const omp = listAgents().find((agent) => agent.id === "omp");
+    expect(omp?.needsProvider).toBe(false);
+  });
 });
 
 describe("listProviders", () => {
@@ -125,6 +158,34 @@ describe("listProviders", () => {
 
   it("leads Pi with the Anthropic route, which is the simplest", () => {
     expect(listProviders("pi")[0].id).toBe("anthropic");
+  });
+});
+
+describe("agentProviders", () => {
+  it("returns the one provider a single-provider agent has, unlike listProviders", () => {
+    expect(listProviders("claude-code")).toEqual([]);
+    expect(agentProviders("claude-code").map((p) => p.id)).toEqual(["anthropic"]);
+  });
+
+  it("returns the one provider Copilot has too", () => {
+    expect(agentProviders("copilot").map((p) => p.id)).toEqual(["github"]);
+  });
+
+  it("returns nothing for a refused agent", () => {
+    expect(agentProviders("cursor")).toEqual([]);
+  });
+
+  it("returns OMP's one internal template provider, even though the wizard never shows it", () => {
+    // config.ts never calls agentProviders for an alwaysCustom agent — see
+    // askChoice — but the entry exists to hold the command/setup template
+    // resolveCustomTarget borrows from, so it is not empty here.
+    expect(agentProviders("omp").map((p) => p.id)).toEqual([CUSTOM_ID]);
+  });
+
+  it("agrees with listProviders once there are two or more", () => {
+    expect(agentProviders("opencode").map((p) => p.id)).toEqual(
+      listProviders("opencode").map((p) => p.id)
+    );
   });
 });
 
@@ -577,5 +638,317 @@ describe("resolveChoice — bad input", () => {
   it("points the student at --force when a choice cannot be resolved", () => {
     const result = resolveChoice({ agent: "nonesuch" }, PORT);
     expect(result.kind === "error" && result.message).toContain("--force");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom base URL — resolving a target the catalogue does not know about
+// ---------------------------------------------------------------------------
+
+describe("resolveChoice — custom base URL", () => {
+  it("resolves a valid http:// target", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
+  });
+
+  it("resolves a valid https:// target", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "https://api.deepseek.com",
+      customRenderer: "openai",
+    });
+    expect(result.upstreamBaseUrl).toBe("https://api.deepseek.com");
+  });
+
+  it("strips a path from the typed base URL, the same way the catalogue keeps a bare host", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "https://api.deepseek.com/v1/some/path",
+      customRenderer: "openai",
+    });
+    expect(result.upstreamBaseUrl).toBe("https://api.deepseek.com");
+  });
+
+  it("rejects a base URL with no scheme", () => {
+    const result = resolveChoice(
+      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "localhost:11434" },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+  });
+
+  it("rejects a base URL that is not a URL at all", () => {
+    const result = resolveChoice(
+      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "not a url" },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+  });
+
+  it("rejects a base URL with an unrelated scheme", () => {
+    const result = resolveChoice(
+      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "ftp://example.com" },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+  });
+
+  it("names the base URL in the rejection", () => {
+    const result = resolveChoice(
+      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "not a url" },
+      PORT
+    );
+    expect(result.kind === "error" && result.message).toContain("not a url");
+  });
+
+  it("points the student at --force when the base URL cannot be resolved", () => {
+    const result = resolveChoice(
+      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "not a url" },
+      PORT
+    );
+    expect(result.kind === "error" && result.message).toContain("--force");
+  });
+
+  it("rejects a custom choice with no base URL at all", () => {
+    const result = resolveChoice({ agent: "opencode", provider: CUSTOM_ID }, PORT);
+    expect(result.kind).toBe("error");
+  });
+
+  it("defaults to the raw renderer when no wire format was given", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+    });
+    expect(result.renderer).toBe("raw");
+  });
+
+  it("uses the openai renderer when that wire format is chosen", () => {
+    expect(
+      customTarget({
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "openai",
+      }).renderer
+    ).toBe("openai");
+  });
+
+  it("uses the anthropic renderer when that wire format is chosen", () => {
+    expect(
+      customTarget({
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "anthropic",
+      }).renderer
+    ).toBe("anthropic");
+  });
+
+  it("uses the raw renderer when the student says they are not sure", () => {
+    expect(
+      customTarget({
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "raw",
+      }).renderer
+    ).toBe("raw");
+  });
+
+  it("warns the student that a raw capture is a JSON dump, not a broken one", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "raw",
+    });
+    expect(result.notes.join(" ")).toContain("not broken");
+  });
+
+  it("labels a custom target's provider as Custom base URL", () => {
+    expect(
+      customTarget({
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "openai",
+      }).providerLabel
+    ).toBe("Custom base URL");
+  });
+
+  it("has no catalogue provider id at all", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result).not.toHaveProperty("provider");
+  });
+});
+
+describe("resolveChoice — custom base URL, per-agent command template", () => {
+  it("borrows OpenCode's Anthropic env var and config file for an anthropic-compatible custom target", () => {
+    // The env var and the config file both point the agent at the proxy's own
+    // address (http://localhost:8787), not at the upstream the student typed
+    // — same as every catalogue target. See upstreamBaseUrl for the upstream.
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+    });
+    expect(result.command).toContain("ANTHROPIC_BASE_URL=http://localhost:8787/v1");
+    expect(result.setup[0].path).toBe("~/.config/opencode/opencode.json");
+    expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
+  });
+
+  it("borrows OpenCode's OpenAI env var for an openai-compatible custom target", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result.command).toContain("OPENAI_BASE_URL=http://localhost:8787/v1");
+  });
+
+  it("defaults OpenCode's raw/not-sure custom target to the OpenAI template", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "raw",
+    });
+    expect(result.command).toContain("OPENAI_BASE_URL=");
+  });
+
+  it("borrows Pi's OpenAI models file for an openai-compatible custom target", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result.setup[0].body).toContain('"openai"');
+    expect(result.setup[0].body).not.toContain('"openai-codex"');
+  });
+
+  it("never borrows Pi's ChatGPT-subscription template for a custom target", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result.setup).toHaveLength(1);
+  });
+
+  it("reuses Claude Code's own template regardless of the wire format chosen, since it has only one", () => {
+    const result = customTarget({
+      agent: "claude-code",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "raw",
+    });
+    expect(result.command).toContain("ANTHROPIC_BASE_URL=http://localhost:8787");
+    expect(result.command).toContain("claude");
+    expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
+  });
+
+  it("reuses Copilot's own template regardless of the wire format chosen, since it has only one", () => {
+    const result = customTarget({
+      agent: "copilot",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+    });
+    expect(result.command).toContain("COPILOT_API_URL=http://localhost:8787");
+  });
+
+  it("never borrows Codex's ChatGPT-subscription template for a custom target", () => {
+    const result = customTarget({
+      agent: "codex",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result.command).not.toContain("/backend-api/codex");
+    expect(result.baseUrl).toBe("http://localhost:8787/v1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OMP — every setup is custom
+// ---------------------------------------------------------------------------
+
+describe("resolveChoice — OMP", () => {
+  it("resolves OMP straight from a base URL and wire format, with no provider needed", () => {
+    const result = resolveChoice(
+      {
+        agent: "omp",
+        customBaseUrl: "http://localhost:8787",
+        customRenderer: "openai",
+      },
+      PORT
+    );
+    expect(result.kind).toBe("custom-target");
+  });
+
+  it("gives OMP its own bin, with no env vars", () => {
+    const result = customTarget({
+      agent: "omp",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "raw",
+    });
+    expect(result.command).toBe("omp");
+  });
+
+  it("gives OMP its YAML models file under ~/.omp/agent/models.yml", () => {
+    const result = customTarget({
+      agent: "omp",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "raw",
+    });
+    expect(result.setup).toHaveLength(1);
+    expect(result.setup[0].path).toBe("~/.omp/agent/models.yml");
+    expect(result.setup[0].language).toBe("yaml");
+  });
+
+  it("puts the resolved base URL under a provider key in the YAML file", () => {
+    const result = customTarget({
+      agent: "omp",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "raw",
+    });
+    expect(result.setup[0].body).toContain('baseUrl: "http://localhost:8787"');
+    expect(result.setup[0].body).toContain("providers:");
+  });
+
+  it("still resolves OMP even when the saved provider field is stale", () => {
+    // alwaysCustom agents ignore whatever is saved under `provider`; only the
+    // custom base URL and renderer matter.
+    const result = resolveChoice(
+      {
+        agent: "omp",
+        provider: "whatever-was-saved-before",
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "raw",
+      },
+      PORT
+    );
+    expect(result.kind).toBe("custom-target");
+  });
+
+  it("rejects OMP with no base URL", () => {
+    expect(resolveChoice({ agent: "omp" }, PORT).kind).toBe("error");
   });
 });

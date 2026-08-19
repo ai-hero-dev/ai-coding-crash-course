@@ -152,6 +152,14 @@ function renderRequest(
   reqJson: any,
   requestText: string
 ): string {
+  // Checked first and explicitly: without this, "raw" is not "anthropic" and
+  // not "gemini", so it would silently fall into the OpenAI parser below —
+  // the same implicit default every other unrecognised renderer id already
+  // falls into. "raw" must never guess at a shape it was not told; it always
+  // goes straight to the generic fallback instead.
+  if (input.renderer === "raw") {
+    return reqJson == null ? fence(requestText) : fenceJson(reqJson);
+  }
   if (reqJson == null) {
     return fence(requestText);
   }
@@ -647,6 +655,26 @@ function renderResponse(input: RenderInput, reqJson: any): string {
   if (raw.trim().length === 0) return "_(empty response)_";
 
   const looksSSE = /(^|\n)\s*(event:|data:)/.test(raw);
+
+  // Checked first and explicitly, for the same reason as renderRequest
+  // above: "raw" must never fall through into the OpenAI stream parser.
+  // Ollama's own response shape — newline-delimited bare JSON, no `data:`
+  // prefix — is not reconstructed here; that is a separate fast-follow. This
+  // path still shows something rather than nothing: an SSE-ish stream is
+  // dumped one parsed event per JSON block, and anything else (including
+  // Ollama's NDJSON) falls back to the untouched raw text.
+  if (input.renderer === "raw") {
+    try {
+      if (!looksSSE) return fenceJson(JSON.parse(raw));
+      const events = sseData(raw);
+      return events.length > 0
+        ? events.map((event) => fenceJson(event)).join("\n\n")
+        : fence(raw);
+    } catch {
+      return fence(raw);
+    }
+  }
+
   try {
     if (!looksSSE) {
       // Non-streaming JSON body.

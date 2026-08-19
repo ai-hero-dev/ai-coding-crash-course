@@ -27,9 +27,18 @@ import {
   resolveChoice,
   shouldLogRequest,
   type AgentChoice,
+  type CustomTarget,
   type ResolvedTarget,
 } from "./agents";
 import { askChoice, clearChoice, loadChoice, saveChoice } from "./config";
+
+/**
+ * A resolved target the proxy can actually route to and render: a catalogue
+ * ResolvedTarget or a student-typed CustomTarget. The two are used
+ * interchangeably everywhere below except upstreamConnection, which is the
+ * one place their upstream host is found differently.
+ */
+type ProxyTarget = ResolvedTarget | CustomTarget;
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -42,10 +51,37 @@ const STATE_FILE = path.join(HERE, ".agent-choice.json");
 // ---------------------------------------------------------------------------
 
 /** Build a filesystem-safe base name: 2026-07-07T14-32-05-123_claude-code */
-function baseName(target: ResolvedTarget): string {
+function baseName(target: ProxyTarget): string {
   const iso = new Date().toISOString(); // 2026-07-07T14:32:05.123Z
   const stamp = iso.replace(/:/g, "-").replace(".", "-").replace("Z", "");
   return `${stamp}_${target.agent}`;
+}
+
+/**
+ * Where a target's traffic actually goes: a scheme, a host and a port.
+ *
+ * A catalogue ResolvedTarget is always HTTPS on 443 — every provider in the
+ * catalogue is a public HTTPS API, so this has never needed to vary, and
+ * still does not: it is read straight off upstreamHost, unchanged. A
+ * CustomTarget can be anything the student typed, including plain HTTP on an
+ * arbitrary port (a local Ollama server, say), so its scheme and port are
+ * parsed from the base URL instead of assumed.
+ */
+export function upstreamConnection(target: ProxyTarget): {
+  hostname: string;
+  port: number;
+  useHttps: boolean;
+} {
+  if (target.kind === "target") {
+    return { hostname: target.upstreamHost, port: 443, useHttps: true };
+  }
+  const url = new URL(target.upstreamBaseUrl);
+  const useHttps = url.protocol === "https:";
+  return {
+    hostname: url.hostname,
+    port: url.port ? Number(url.port) : useHttps ? 443 : 80,
+    useHttps,
+  };
 }
 
 /**
@@ -76,7 +112,7 @@ function forwardHeaders(
 function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  target: ResolvedTarget
+  target: ProxyTarget
 ): void {
   const reqPath = req.url ?? "/";
 
@@ -87,43 +123,46 @@ function handle(
     const timestamp = new Date().toISOString();
     const base = baseName(target);
     const encoding = req.headers["content-encoding"];
+    const { hostname, port, useHttps } = upstreamConnection(target);
 
-    const upstreamReq = https.request(
-      {
-        hostname: target.upstreamHost,
-        port: 443,
-        path: reqPath,
-        method: req.method,
-        headers: {
-          ...forwardHeaders(req.headers, body),
-          host: target.upstreamHost,
-        },
+    const onUpstreamResponse = (upstreamRes: http.IncomingMessage) => {
+      res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      const responseChunks: Buffer[] = [];
+      upstreamRes.on("data", (chunk: Buffer) => {
+        responseChunks.push(chunk);
+        res.write(chunk); // stream straight back to the agent, unbuffered
+      });
+      upstreamRes.on("end", () => {
+        res.end();
+        const responseRaw = Buffer.concat(responseChunks).toString("utf8");
+        writeCapture({
+          base,
+          target,
+          timestamp,
+          method: req.method ?? "POST",
+          path: reqPath,
+          statusCode: upstreamRes.statusCode ?? 0,
+          headers: req.headers,
+          requestBody: body,
+          requestEncoding: Array.isArray(encoding) ? encoding[0] : encoding,
+          responseRaw,
+        });
+      });
+    };
+
+    const requestOptions: http.RequestOptions = {
+      hostname,
+      port,
+      path: reqPath,
+      method: req.method,
+      headers: {
+        ...forwardHeaders(req.headers, body),
+        host: hostname,
       },
-      (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-        const responseChunks: Buffer[] = [];
-        upstreamRes.on("data", (chunk: Buffer) => {
-          responseChunks.push(chunk);
-          res.write(chunk); // stream straight back to the agent, unbuffered
-        });
-        upstreamRes.on("end", () => {
-          res.end();
-          const responseRaw = Buffer.concat(responseChunks).toString("utf8");
-          writeCapture({
-            base,
-            target,
-            timestamp,
-            method: req.method ?? "POST",
-            path: reqPath,
-            statusCode: upstreamRes.statusCode ?? 0,
-            headers: req.headers,
-            requestBody: body,
-            requestEncoding: Array.isArray(encoding) ? encoding[0] : encoding,
-            responseRaw,
-          });
-        });
-      }
-    );
+    };
+    const upstreamReq = useHttps
+      ? https.request(requestOptions, onUpstreamResponse)
+      : http.request(requestOptions, onUpstreamResponse);
 
     upstreamReq.on("error", (err) => {
       console.error(`[request-logger] upstream error: ${err.message}`);
@@ -142,7 +181,7 @@ function handle(
 
 interface Capture {
   base: string;
-  target: ResolvedTarget;
+  target: ProxyTarget;
   timestamp: string;
   method: string;
   path: string;
@@ -209,13 +248,15 @@ function field(label: string, value: string): void {
   console.log(`  ${dim(label.padEnd(10))} ${value}`);
 }
 
-function printBanner(target: ResolvedTarget): void {
+function printBanner(target: ProxyTarget): void {
   const rule = dim("-".repeat(72));
+  const forwards =
+    target.kind === "target" ? `https://${target.upstreamHost}` : target.upstreamBaseUrl;
   console.log("");
   console.log(rule);
   field("Agent", bold(`${target.agentLabel} (${target.providerLabel})`));
   field("Listening", `http://localhost:${PORT}`);
-  field("Forwards", `https://${target.upstreamHost}`);
+  field("Forwards", forwards);
   field("Logs", dim(LOG_DIR));
   console.log(rule);
 
@@ -374,7 +415,14 @@ function wrap(text: string, width: number): string[] {
   return lines;
 }
 
-main().catch((err) => {
-  console.error(`[request-logger] ${(err as Error).message}`);
-  process.exit(1);
-});
+// Only start the wizard and the server when this file is run directly (`npm
+// run request-logger`, or `tsx request-logger/proxy.ts`), not when it is
+// imported — the tests import pure functions like upstreamConnection from
+// this module, and must not trigger the interactive wizard by doing so.
+const isMain = path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().catch((err) => {
+    console.error(`[request-logger] ${(err as Error).message}`);
+    process.exit(1);
+  });
+}

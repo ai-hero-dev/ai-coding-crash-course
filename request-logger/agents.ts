@@ -13,14 +13,28 @@
  * the way a README does.
  *
  * Adding an eighth agent should be one entry here and nothing else.
+ *
+ * Not every student's setup fits a catalogue entry, though — a local model
+ * server or a small provider has no fixed host to hard-code. For those, the
+ * wizard offers "Custom base URL" wherever it offers a provider, and builds a
+ * CustomTarget from what the student types instead of looking one up. See
+ * resolveCustomTarget below.
  */
 
-export type RendererId = "anthropic" | "openai" | "gemini";
+export type RendererId = "anthropic" | "openai" | "gemini" | "raw";
 
-/** What the student picked. This, and only this, is what gets saved to disk. */
+/**
+ * What the student picked. This, and only this, is what gets saved to disk —
+ * except customBaseUrl and customRenderer, which exist only for a custom
+ * target and are the one documented exception. See config.ts.
+ */
 export interface AgentChoice {
   agent: string;
   provider?: string;
+  /** Only set when provider is CUSTOM_ID: the base URL the student typed. */
+  customBaseUrl?: string;
+  /** Only set when provider is CUSTOM_ID: the wire format they chose for it. */
+  customRenderer?: RendererId;
 }
 
 export interface ResolvedTarget {
@@ -41,6 +55,29 @@ export interface ResolvedTarget {
   /** Things worth knowing. Printed under the command. */
   notes: string[];
   /** Things that will otherwise look like the tool is broken. */
+  warnings: string[];
+}
+
+/**
+ * Resolved to a target the catalogue has no entry for: the student typed
+ * their own base URL and picked their own wire format, rather than one being
+ * looked up from a ProviderEntry. It plays the same role as a ResolvedTarget
+ * everywhere downstream — the proxy routes to it and renders it exactly the
+ * same way — so the two are only ever told apart by `kind`.
+ */
+export interface CustomTarget {
+  kind: "custom-target";
+  agent: string;
+  agentLabel: string;
+  /** Always "Custom base URL": there is no catalogue provider label to show. */
+  providerLabel: string;
+  /** The scheme+host[+port] the student typed, with any path stripped. */
+  upstreamBaseUrl: string;
+  renderer: RendererId;
+  baseUrl: string;
+  command: string;
+  setup: SetupFile[];
+  notes: string[];
   warnings: string[];
 }
 
@@ -73,6 +110,7 @@ export interface SetupRequest {
 
 export type Resolution =
   | ResolvedTarget
+  | CustomTarget
   | AgentRefusal
   | ResolveError
   | SetupRequest;
@@ -89,6 +127,28 @@ export const OTHER_ID = "other";
 export const OTHER_LABEL = "Other, or not sure";
 export const ISSUE_URL =
   "https://github.com/ai-hero-dev/ai-coding-crash-course/issues/new";
+
+/**
+ * The option next to "Other" at the provider question: a student whose
+ * provider is not in the catalogue, but who knows its base URL, does not have
+ * to file an issue and wait. This is offered on every supported agent's
+ * provider question, however many catalogue providers it has — see
+ * agentProviders and askChoice in config.ts.
+ */
+export const CUSTOM_ID = "custom";
+export const CUSTOM_LABEL = "Custom base URL";
+
+/**
+ * The wire-format question a custom target answers instead of a renderer
+ * being looked up from a ProviderEntry. "raw" is a real RendererId, not a
+ * placeholder — render.ts checks it first and never guesses at a shape it
+ * was not told.
+ */
+export const WIRE_FORMAT_OPTIONS: Array<{ id: RendererId; label: string }> = [
+  { id: "openai", label: "OpenAI-compatible (chat/completions)" },
+  { id: "anthropic", label: "Anthropic-compatible (messages)" },
+  { id: "raw", label: "Not sure — show me the raw JSON" },
+];
 
 export interface SetupFile {
   path: string;
@@ -121,6 +181,15 @@ interface ProviderEntry {
   setup?: SetupFile[];
   notes?: string[];
   warnings?: string[];
+  /**
+   * Which custom-base-url wire formats this provider's command, env and
+   * setup file are a reasonable stand-in for. Only consulted on an agent
+   * with more than one provider — see findCustomTemplate. A provider tied to
+   * one specific login route (a ChatGPT subscription, a Google account) is
+   * never tagged: reusing its template for an unrelated third-party server
+   * would silently misconfigure it rather than help.
+   */
+  customTemplateFor?: RendererId[];
 }
 
 interface AgentEntry {
@@ -129,6 +198,15 @@ interface AgentEntry {
   /** A supported agent has providers. A refused one has a reason. */
   providers?: ProviderEntry[];
   reason?: string;
+  /**
+   * True when every setup for this agent is a custom target: there is no
+   * fixed catalogue provider to fall back to, so the wizard skips the
+   * provider question and asks the two custom-base-url questions directly.
+   * OMP is the first agent like this — it can point at Ollama, LM Studio,
+   * llama.cpp, LiteLLM, or anything else, so no single upstream host is ever
+   * right for it.
+   */
+  alwaysCustom?: boolean;
 }
 
 /**
@@ -168,6 +246,31 @@ function piModels(providerId: string, baseUrl: string): SetupFile {
     ].join("\n"),
   };
 }
+
+/**
+ * OMP's provider override file, in YAML, under ~/.omp/agent/models.yml.
+ *
+ * OMP does not know, and this tool cannot know, which backend the student is
+ * actually pointing at — Ollama, LM Studio, llama.cpp, LiteLLM, or something
+ * else entirely — so the provider key below is a generic placeholder
+ * ("custom") rather than a real backend name. OMP does not care what the key
+ * is called, only that baseUrl is set correctly under it, so the placeholder
+ * costs the student nothing; they may rename it if they prefer a name that
+ * matches their backend.
+ */
+function ompModels(baseUrl: string): SetupFile {
+  return {
+    path: "~/.omp/agent/models.yml",
+    language: "yaml",
+    body: ["providers:", "  custom:", `    baseUrl: "${baseUrl}"`].join("\n"),
+  };
+}
+
+const OMP_NOTE =
+  "OMP has no backend of its own to hard-code the way the rest of this " +
+  "catalogue does. It can point at Ollama, LM Studio, llama.cpp, LiteLLM, or " +
+  "any other server that speaks one of the wire formats offered here, so " +
+  "every OMP setup goes through the base URL and wire format you chose.";
 
 const OPENCODE_NOTE =
   "The environment variable above works, but only by accident: OpenCode passes " +
@@ -232,6 +335,11 @@ const AGENTS: AgentEntry[] = [
         suffix: "/v1",
         bin: "codex",
         args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        // The only usable template for a custom Codex target: Codex only
+        // ever speaks the OpenAI-compatible wire format, so it is the
+        // catch-all for every choice, including "anthropic" — a mismatch
+        // there is Codex's limitation, not a bug in this tool.
+        customTemplateFor: ["openai", "raw", "anthropic"],
         notes: [CODEX_OVERRIDE_NOTE],
       },
     ],
@@ -284,6 +392,7 @@ const AGENTS: AgentEntry[] = [
         suffix: "/v1",
         env: [["ANTHROPIC_BASE_URL", "{baseUrl}"]],
         bin: "opencode",
+        customTemplateFor: ["anthropic"],
         setup: [
           {
             path: "~/.config/opencode/opencode.json",
@@ -319,6 +428,10 @@ const AGENTS: AgentEntry[] = [
         suffix: "/v1",
         env: [["OPENAI_BASE_URL", "{baseUrl}"]],
         bin: "opencode",
+        // Also the catch-all for "raw"/not sure: a third-party server behind
+        // a custom base URL is far more often OpenAI-compatible than
+        // Anthropic-compatible, so this is the better default guess.
+        customTemplateFor: ["openai", "raw"],
         setup: [
           {
             path: "~/.config/opencode/opencode.json",
@@ -363,6 +476,7 @@ const AGENTS: AgentEntry[] = [
         upstreamHost: "api.anthropic.com",
         renderer: "anthropic",
         bin: "pi",
+        customTemplateFor: ["anthropic"],
         setup: [piModels("anthropic", "{baseUrl}")],
         notes: [
           PI_NOTE,
@@ -379,6 +493,9 @@ const AGENTS: AgentEntry[] = [
         // Pi hands this to the OpenAI SDK, which appends `/responses`.
         suffix: "/v1",
         bin: "pi",
+        // Also the catch-all for "raw"/not sure — see the OpenCode entry
+        // above for why an OpenAI-compatible guess is the better default.
+        customTemplateFor: ["openai", "raw"],
         setup: [piModels("openai", "{baseUrl}")],
         notes: [PI_NOTE],
       },
@@ -414,6 +531,31 @@ const AGENTS: AgentEntry[] = [
     ],
   },
   {
+    id: "omp",
+    label: "OMP (Oh My Pi)",
+    // Every setup for OMP goes through the custom-base-url questions — see
+    // AgentEntry.alwaysCustom. The one provider below never reaches the
+    // wizard; it exists purely to hold the bin and setup-file template that
+    // resolveCustomTarget borrows from, the same way findCustomTemplate
+    // borrows from a real provider for every other agent.
+    alwaysCustom: true,
+    providers: [
+      {
+        id: CUSTOM_ID,
+        label: CUSTOM_LABEL,
+        // Unused: OMP never reaches the normal (non-custom) resolution path
+        // that would read this.
+        upstreamHost: "",
+        // Irrelevant here too — the resolved renderer always comes from the
+        // student's answer, not from this template. See resolveCustomTarget.
+        renderer: "raw",
+        bin: "omp",
+        setup: [ompModels("{baseUrl}")],
+        notes: [OMP_NOTE],
+      },
+    ],
+  },
+  {
     id: "gemini",
     label: "Gemini CLI",
     providers: [
@@ -438,6 +580,13 @@ const AGENTS: AgentEntry[] = [
         renderer: "gemini",
         env: [["GOOGLE_GEMINI_BASE_URL", "{baseUrl}"]],
         bin: "gemini",
+        // The only usable template for a custom Gemini CLI target: the
+        // Google-login route is tied to that login and would misconfigure an
+        // unrelated server. Gemini CLI's own wire format does not actually
+        // match any of the custom choices, so this is a best-effort catch-all
+        // for all three — a mismatch shows up as a renderer warning, not a
+        // silent one.
+        customTemplateFor: ["openai", "anthropic", "raw"],
         warnings: [
           "The two Gemini routes use different variables and they are not " +
             "interchangeable. GOOGLE_GEMINI_BASE_URL is ignored under a Google " +
@@ -467,6 +616,8 @@ export interface AgentSummary {
   supported: boolean;
   /** True when the student must also be asked which model provider they use. */
   needsProvider: boolean;
+  /** True when this agent has no catalogue provider: every setup is custom. */
+  alwaysCustom: boolean;
 }
 
 export interface ProviderSummary {
@@ -488,6 +639,7 @@ export function listAgents(): AgentSummary[] {
     label: agent.label,
     supported: agent.providers != null,
     needsProvider: (agent.providers?.length ?? 0) > 1,
+    alwaysCustom: agent.alwaysCustom === true,
   }));
   return [
     ...summaries.filter((agent) => agent.supported),
@@ -495,11 +647,34 @@ export function listAgents(): AgentSummary[] {
   ];
 }
 
-/** The providers to ask about for one agent. Empty when there is nothing to ask. */
+/**
+ * The providers to ask about for one agent, when there is more than one to
+ * choose between. Empty when there is nothing to ask — a refused agent has
+ * none, and an agent with exactly one provider is assumed rather than asked.
+ *
+ * This stays gated at two on purpose, unchanged by the custom-base-url
+ * mechanism: it describes the catalogue, not the wizard's options. See
+ * agentProviders for the list config.ts actually builds the provider
+ * question's options from, which is not gated this way.
+ */
 export function listProviders(agentId: string): ProviderSummary[] {
   const agent = AGENTS.find((a) => a.id === agentId);
   if (!agent?.providers || agent.providers.length < 2) return [];
   return agent.providers.map((p) => ({ id: p.id, label: p.label }));
+}
+
+/**
+ * Every catalogue provider for one agent, regardless of how many there are.
+ *
+ * config.ts uses this, not listProviders, to build the provider question's
+ * options — because "Custom base URL" is now offered at that question for
+ * every supported agent, even one with a single catalogue provider, there is
+ * always something to pick between even when listProviders would say there
+ * is nothing to ask about.
+ */
+export function agentProviders(agentId: string): ProviderSummary[] {
+  const agent = AGENTS.find((a) => a.id === agentId);
+  return (agent?.providers ?? []).map((p) => ({ id: p.id, label: p.label }));
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +719,115 @@ function buildCommand(provider: ProviderEntry, baseUrl: string): string {
 }
 
 /**
+ * Turn what the student typed into an origin (scheme + host [+ port]), or
+ * nothing. Only http and https make sense here — the proxy speaks plain HTTP
+ * to whatever it forwards to, over either transport — so anything else (a
+ * bare host with no scheme, a typo, an unrelated protocol) is rejected
+ * rather than guessed at. A wrong guess would fail as a confusing connection
+ * error; this fails as a message the student can act on.
+ */
+function parseUpstreamUrl(raw: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return url;
+}
+
+/**
+ * Which catalogue provider a custom target borrows its command, environment
+ * variable and setup file from. A custom target has no ProviderEntry of its
+ * own, but every agent still needs a real bin to print, and most need a real
+ * env var or config file shape too — this is where those come from instead.
+ *
+ * An agent with exactly one provider has only one thing to borrow, so that
+ * one is used regardless of the wire format chosen: it is a best-effort
+ * template, not a promise, and a mismatch is worth a note, not a dead end.
+ * An agent with more than one provider picks by matching the chosen wire
+ * format against each provider's `customTemplateFor` tags.
+ */
+function findCustomTemplate(
+  agent: AgentEntry,
+  renderer: RendererId
+): ProviderEntry | undefined {
+  const providers = agent.providers ?? [];
+  if (providers.length <= 1) return providers[0];
+  return (
+    providers.find((p) => p.customTemplateFor?.includes(renderer)) ??
+    providers.find((p) => (p.customTemplateFor?.length ?? 0) > 0)
+  );
+}
+
+/**
+ * Build a target from what the student typed, in place of a catalogue
+ * lookup. The only facts on hand are the base URL and the wire format they
+ * chose; everything else is borrowed from the closest matching catalogue
+ * provider — see findCustomTemplate.
+ */
+function resolveCustomTarget(
+  agent: AgentEntry,
+  choice: AgentChoice,
+  port: number
+): Resolution {
+  if (!choice.customBaseUrl) {
+    return {
+      kind: "error",
+      message: `${agent.label} needs a custom base URL. Run with --force to choose again.`,
+    };
+  }
+
+  const upstream = parseUpstreamUrl(choice.customBaseUrl);
+  if (!upstream) {
+    return {
+      kind: "error",
+      message:
+        `"${choice.customBaseUrl}" is not a usable base URL. It must start ` +
+        `with http:// or https://, e.g. http://localhost:11434. Run with ` +
+        `--force to choose again.`,
+    };
+  }
+
+  const renderer: RendererId = choice.customRenderer ?? "raw";
+  const template = findCustomTemplate(agent, renderer);
+  const baseUrl = `http://localhost:${port}${template?.suffix ?? ""}`;
+
+  const notes = [
+    `This command is built from ${agent.label}'s own setup pattern, since a ` +
+      `custom target has no dedicated one of its own. If a note below assumes ` +
+      `a specific login or account, it may not apply to your target.`,
+    ...(template?.notes ?? []),
+  ];
+  if (renderer === "raw") {
+    notes.push(
+      'You picked "not sure" for the wire format, so every capture falls ' +
+        "back to a raw JSON dump instead of a fully rendered one. That is " +
+        "not broken — it is just less readable. Run with --force and pick a " +
+        "format once you know it, and the readable renderer takes over."
+    );
+  }
+
+  return {
+    kind: "custom-target",
+    agent: agent.id,
+    agentLabel: agent.label,
+    providerLabel: CUSTOM_LABEL,
+    upstreamBaseUrl: upstream.origin,
+    renderer,
+    baseUrl,
+    command: template ? buildCommand(template, baseUrl) : agent.id,
+    setup: (template?.setup ?? []).map((file) => ({
+      ...file,
+      body: file.body.replace(/\{baseUrl\}/g, baseUrl),
+    })),
+    notes,
+    warnings: template?.warnings ?? [],
+  };
+}
+
+/**
  * Turn a saved choice into everything the tool needs, or into a clear reason
  * why it cannot.
  *
@@ -583,6 +867,14 @@ export function resolveChoice(
       agentLabel: agent.label,
       reason: agent.reason ?? "This agent cannot be logged.",
     };
+  }
+
+  // A custom target is resolved from what the student typed, not from a
+  // catalogue lookup — either because they chose "Custom base URL" at the
+  // provider question, or because every setup for this agent is custom
+  // (alwaysCustom, e.g. OMP), which never shows that question at all.
+  if (agent.alwaysCustom || choice.provider === CUSTOM_ID) {
+    return resolveCustomTarget(agent, choice, options.port);
   }
 
   let provider: ProviderEntry | undefined;
