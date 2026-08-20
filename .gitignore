@@ -25,3 +25,6 @@
 # request-logger remembers which agent you chose
 /request-logger/.agent-choice.json
 
+# Antigravity sync state
+.agents/.antigravity-sync-state.json
+
