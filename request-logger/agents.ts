@@ -448,6 +448,31 @@ const AGENTS: AgentEntry[] = [
     ],
   },
   {
+    id: "antigravity",
+    label: "Antigravity (AGY)",
+    providers: [
+      {
+        id: "google-login",
+        label: "Google account login",
+        upstreamHost: "cloudcode-pa.googleapis.com",
+        renderer: "gemini",
+        env: [["CODE_ASSIST_ENDPOINT", "{baseUrl}"]],
+        bin: "agy",
+        notes: [
+          "Points Antigravity CLI (agy) through the request-logger proxy.",
+        ],
+      },
+      {
+        id: "api-key",
+        label: "Gemini API key",
+        upstreamHost: "generativelanguage.googleapis.com",
+        renderer: "gemini",
+        env: [["GOOGLE_GEMINI_BASE_URL", "{baseUrl}"]],
+        bin: "agy",
+      },
+    ],
+  },
+  {
     id: "amp",
     label: "Amp",
     reason:

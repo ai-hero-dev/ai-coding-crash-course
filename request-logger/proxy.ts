@@ -30,6 +30,16 @@ import {
   type ResolvedTarget,
 } from "./agents";
 import { askChoice, clearChoice, loadChoice, saveChoice } from "./config";
+import { traceWithLangfuse } from "./langfuse";
+
+// Automatically load .env if present
+try {
+  if (typeof process.loadEnvFile === "function") {
+    process.loadEnvFile();
+  }
+} catch {
+  // Ignore if .env doesn't exist
+}
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -190,6 +200,7 @@ function writeCapture(c: Capture): void {
         `logs/${c.base}.md`
       )}`
     );
+    void traceWithLangfuse(c);
   } catch (err) {
     console.error(
       `[request-logger] failed to write logs: ${(err as Error).message}`
@@ -217,6 +228,12 @@ function printBanner(target: ResolvedTarget): void {
   field("Listening", `http://localhost:${PORT}`);
   field("Forwards", `https://${target.upstreamHost}`);
   field("Logs", dim(LOG_DIR));
+  field(
+    "Langfuse",
+    process.env.LANGFUSE_PUBLIC_KEY
+      ? bold("Enabled (tracing to Langfuse)")
+      : dim("Disabled (optional: set LANGFUSE_PUBLIC_KEY & LANGFUSE_SECRET_KEY)")
+  );
   console.log(rule);
 
   for (const file of target.setup) {

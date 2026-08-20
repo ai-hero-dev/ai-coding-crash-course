@@ -59,6 +59,7 @@ from this table. It is here so you can see what is supported before you start.
 | OpenCode         | Yes   | One command, or a config file.                   |
 | Pi               | Yes   | A config file. Pi has no base URL variable.      |
 | Gemini CLI       | Yes   | One command. The free Google login works.        |
+| Antigravity (AGY)| Yes   | One command. Google login or Gemini API key.     |
 | Cursor CLI       | No    | Nothing can make it work. See below.             |
 | Amp              | No    | Nothing can make it work. See below.             |
 

@@ -68,6 +68,7 @@ describe("listAgents", () => {
       "opencode",
       "pi",
       "gemini",
+      "antigravity",
       "cursor",
       "amp",
     ]);
