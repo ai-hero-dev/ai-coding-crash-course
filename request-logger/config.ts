@@ -9,8 +9,9 @@
  *
  * The one documented exception is a custom base URL. It has no catalogue
  * entry to re-derive from — the student typed it — so for that choice only,
- * the base URL and the wire format are saved alongside the agent and
- * provider. Every other choice keeps behaving exactly as described above.
+ * the base URL and wire format are saved alongside the agent and provider.
+ * OpenCode's custom OpenAI-compatible route also saves its selected model.
+ * Every other choice keeps behaving exactly as described above.
  *
  * This is glue, not logic. The decisions all live in agents.ts, which is where
  * the tests are.
@@ -30,6 +31,7 @@ import {
   type AgentChoice,
   type RendererId,
 } from "./agents";
+import { discoverModelIds } from "./model-discovery";
 
 export interface WizardAnswer {
   choice: AgentChoice;
@@ -54,15 +56,20 @@ export function loadChoice(file: string): AgentChoice | null {
     if (typeof parsed?.agent !== "string") return null;
     return {
       agent: parsed.agent,
-      provider: typeof parsed.provider === "string" ? parsed.provider : undefined,
+      provider:
+        typeof parsed.provider === "string" ? parsed.provider : undefined,
       // The one documented exception to "nothing but the choice is saved" —
       // see the module comment above.
       customBaseUrl:
-        typeof parsed.customBaseUrl === "string" ? parsed.customBaseUrl : undefined,
+        typeof parsed.customBaseUrl === "string"
+          ? parsed.customBaseUrl
+          : undefined,
       customRenderer:
         typeof parsed.customRenderer === "string"
           ? (parsed.customRenderer as RendererId)
           : undefined,
+      customModel:
+        typeof parsed.customModel === "string" ? parsed.customModel : undefined,
     };
   } catch {
     return null;
@@ -115,13 +122,17 @@ function stopIfCancelled<T>(value: T | symbol): T {
  * provider question's "Custom base URL" option, and an alwaysCustom agent
  * that skips straight here.
  */
-async function askCustomTarget(): Promise<{ baseUrl: string; renderer: RendererId }> {
+async function askCustomTarget(): Promise<{
+  baseUrl: string;
+  renderer: RendererId;
+}> {
   const baseUrl = stopIfCancelled(
     await text({
       message: "What's the base URL of the model server you want to log?",
       placeholder: "http://localhost:11434",
       validate: (value) => {
-        if (!value || value.trim().length === 0) return "A base URL is required.";
+        if (!value || value.trim().length === 0)
+          return "A base URL is required.";
         try {
           const url = new URL(value.trim());
           if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -148,6 +159,47 @@ async function askCustomTarget(): Promise<{ baseUrl: string; renderer: RendererI
   return { baseUrl: baseUrl.trim(), renderer };
 }
 
+async function askModelIdManually(): Promise<string> {
+  const model = stopIfCancelled(
+    await text({
+      message: "What's the model ID?",
+      placeholder: "qwen3:8b",
+      validate: (value) =>
+        !value || value.trim().length === 0
+          ? "A model ID is required."
+          : undefined,
+    })
+  );
+  return model.trim();
+}
+
+async function askOpenCodeModel(baseUrl: string): Promise<string> {
+  const modelIds = await discoverModelIds(baseUrl);
+  if (modelIds.length === 0) {
+    console.warn(
+      "[request-logger] Could not discover any models; enter a model ID manually."
+    );
+    return askModelIdManually();
+  }
+
+  type ModelSelection = { kind: "model"; id: string } | { kind: "manual" };
+  const manual: ModelSelection = { kind: "manual" };
+  const selected = stopIfCancelled(
+    await select<ModelSelection>({
+      message: "Which model do you want OpenCode to use?",
+      options: [
+        ...modelIds.map((id) => ({
+          value: { kind: "model" as const, id },
+          label: id,
+        })),
+        { value: manual, label: "Enter a model ID manually" },
+      ],
+    })
+  );
+
+  return selected.kind === "model" ? selected.id : askModelIdManually();
+}
+
 export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
   intro(styleText("bold", " request-logger "));
 
@@ -168,14 +220,16 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
 
   // "Other" ends the wizard. There is no provider to ask about, and nothing to
   // remember.
-  if (agentId === OTHER_ID) return { choice: { agent: OTHER_ID }, remember: false };
+  if (agentId === OTHER_ID)
+    return { choice: { agent: OTHER_ID }, remember: false };
 
   const agent = agents.find((a) => a.id === agentId);
 
   // An agent that cannot be logged is a dead end. Saving it would only make the
   // student clear the file before they could try a different one, so the
   // question is not asked at all.
-  if (agent && !agent.supported) return { choice: { agent: agentId }, remember: false };
+  if (agent && !agent.supported)
+    return { choice: { agent: agentId }, remember: false };
 
   let choice: AgentChoice;
 
@@ -211,7 +265,10 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
     );
 
     if (providerId === OTHER_ID) {
-      return { choice: { agent: agentId, provider: OTHER_ID }, remember: false };
+      return {
+        choice: { agent: agentId, provider: OTHER_ID },
+        remember: false,
+      };
     }
 
     if (providerId === CUSTOM_ID) {
@@ -221,6 +278,10 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
         provider: CUSTOM_ID,
         customBaseUrl: custom.baseUrl,
         customRenderer: custom.renderer,
+        customModel:
+          agentId === "opencode" && custom.renderer === "openai"
+            ? await askOpenCodeModel(custom.baseUrl)
+            : undefined,
       };
     } else {
       choice = { agent: agentId, provider: providerId };
