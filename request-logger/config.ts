@@ -25,6 +25,7 @@ import {
   agentProviders,
   CUSTOM_ID,
   CUSTOM_LABEL,
+  customTargetNeedsModel,
   listAgents,
   OTHER_ID,
   OTHER_LABEL,
@@ -296,11 +297,9 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
         provider: CUSTOM_ID,
         customBaseUrl: custom.baseUrl,
         customRenderer: custom.renderer,
-        customModel:
-          (agentId === "opencode" && custom.renderer === "openai") ||
-          agentId === "pi"
-            ? await askDiscoveredModel(custom.baseUrl)
-            : undefined,
+        customModel: customTargetNeedsModel(agentId, custom.renderer)
+          ? await askDiscoveredModel(custom.baseUrl)
+          : undefined,
       };
     } else {
       choice = { agent: agentId, provider: providerId };

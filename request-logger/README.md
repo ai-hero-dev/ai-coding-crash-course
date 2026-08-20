@@ -57,6 +57,11 @@ Endpoints that require credentials for model listing are not supported.
   offering its built-in model names (`gpt-4o`, and the like), which almost
   never exist on a custom server — the agent would start but every turn would
   fail.
+- Pi asks for a model on every wire format, including Anthropic-compatible —
+  but discovery itself only ever checks the OpenAI-style `/v1/models` listing
+  endpoint, which an Anthropic-compatible server often does not expose. If
+  discovery finds nothing there, that is expected, and typing the model ID by
+  hand is the normal path, not a sign something is broken.
 
 To change a remembered answer:
 

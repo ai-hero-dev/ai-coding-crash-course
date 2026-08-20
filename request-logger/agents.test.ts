@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   agentProviders,
   CUSTOM_ID,
+  customTargetNeedsModel,
   ISSUE_URL,
   listAgents,
   listProviders,
@@ -1008,6 +1009,28 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     });
   });
 
+  it("warns an Anthropic-compatible Pi custom target that discovery may find nothing, since /v1/models is OpenAI-shaped", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "llama3.1:8b",
+    });
+    expect(result.notes.join(" ")).toContain("/v1/models");
+  });
+
+  it("gives an openai-compatible Pi custom target no discovery caveat, since that is exactly what discovery checks", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    expect(result.notes.join(" ")).not.toContain("/v1/models");
+  });
+
   it("gives Pi a bare command for a custom target too, since Pi has no base URL variable", () => {
     const result = customTarget({
       agent: "pi",
@@ -1063,6 +1086,28 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     });
     expect(result.command).not.toContain("/backend-api/codex");
     expect(result.baseUrl).toBe("http://localhost:8787/v1");
+  });
+});
+
+describe("customTargetNeedsModel", () => {
+  it("needs a model for Pi on every wire format", () => {
+    expect(customTargetNeedsModel("pi", "openai")).toBe(true);
+    expect(customTargetNeedsModel("pi", "anthropic")).toBe(true);
+    expect(customTargetNeedsModel("pi", "raw")).toBe(true);
+  });
+
+  it("needs a model for OpenCode only on the OpenAI-compatible wire format", () => {
+    expect(customTargetNeedsModel("opencode", "openai")).toBe(true);
+    expect(customTargetNeedsModel("opencode", "anthropic")).toBe(false);
+    expect(customTargetNeedsModel("opencode", "raw")).toBe(false);
+  });
+
+  it("needs no model for any other agent, on any wire format", () => {
+    for (const renderer of ["openai", "anthropic", "raw"] as const) {
+      expect(customTargetNeedsModel("codex", renderer)).toBe(false);
+      expect(customTargetNeedsModel("claude-code", renderer)).toBe(false);
+      expect(customTargetNeedsModel("omp", renderer)).toBe(false);
+    }
   });
 });
 
