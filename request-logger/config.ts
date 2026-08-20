@@ -182,6 +182,16 @@ async function askOpenCodeModel(baseUrl: string): Promise<string> {
     return askModelIdManually();
   }
 
+  // Exactly one candidate is not a choice — there is nothing to pick between,
+  // so asking would only be a confirmation click. Two or more is a real
+  // choice (which local model? which quantization?) and stays interactive, so
+  // the student is never silently pointed at a model they did not mean to
+  // use.
+  if (modelIds.length === 1) {
+    console.log(`[request-logger] Using the only model found: ${modelIds[0]}`);
+    return modelIds[0];
+  }
+
   type ModelSelection = { kind: "model"; id: string } | { kind: "manual" };
   const manual: ModelSelection = { kind: "manual" };
   const selected = stopIfCancelled(

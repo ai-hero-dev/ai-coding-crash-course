@@ -76,7 +76,10 @@ describe("the OpenCode custom OpenAI-compatible model step", () => {
 
   it("accepts required manual input even when discovery succeeded", async () => {
     customOpenCodeAnswers();
-    discoveryMocks.discoverModelIds.mockResolvedValue(["qwen3:8b"]);
+    discoveryMocks.discoverModelIds.mockResolvedValue([
+      "qwen3:8b",
+      "deepseek-r1",
+    ]);
     promptMocks.select.mockImplementationOnce(async (options) => {
       return options.options.at(-1).value;
     });
@@ -90,6 +93,21 @@ describe("the OpenCode custom OpenAI-compatible model step", () => {
     const answer = await askChoice({ offerToRemember: false });
 
     expect(answer.choice.customModel).toBe("model with spaces");
+  });
+
+  it("uses the only discovered model without asking", async () => {
+    customOpenCodeAnswers();
+    discoveryMocks.discoverModelIds.mockResolvedValue(["qwen3:8b"]);
+    // Three prior selects only: agent, "custom", renderer. A fourth select
+    // call here would mean the model step asked anyway.
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const answer = await askChoice({ offerToRemember: false });
+
+    expect(promptMocks.select).toHaveBeenCalledTimes(3);
+    expect(answer.choice.customModel).toBe("qwen3:8b");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("qwen3:8b"));
+    log.mockRestore();
   });
 
   it("warns and immediately requires manual entry when discovery returns no IDs", async () => {
