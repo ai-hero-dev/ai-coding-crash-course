@@ -35,7 +35,11 @@ export interface AgentChoice {
   customBaseUrl?: string;
   /** Only set when provider is CUSTOM_ID: the wire format they chose for it. */
   customRenderer?: RendererId;
-  /** Selected model for OpenCode's custom OpenAI-compatible route. */
+  /**
+   * Selected model for a custom target that needs one declared up front:
+   * OpenCode's custom OpenAI-compatible route, and any of Pi's custom
+   * routes (see resolveCustomTarget).
+   */
   customModel?: string;
 }
 
@@ -228,8 +232,19 @@ const PI_NOTE =
  * Pi's provider override file. The key is `baseUrl`, in this exact spelling.
  * Pi accepts other spellings into the file and then refuses to start, so this
  * is worth getting right for the student.
+ *
+ * `modelId`, when given, is written as a one-entry `models` array under the
+ * same provider. Pi replaces that provider's whole built-in model catalogue
+ * with whatever `models` lists — see resolveCustomTarget's Pi branch, which
+ * is the only caller that passes it. Omitted, as it is for every catalogue
+ * entry above, Pi keeps its built-in catalogue for that provider, which is
+ * correct there because those routes really do talk to Anthropic or OpenAI.
  */
-function piModels(providerId: string, baseUrl: string): SetupFile {
+function piModels(
+  providerId: string,
+  baseUrl: string,
+  modelId?: string
+): SetupFile {
   return {
     path: "~/.pi/agent/models.json",
     language: "json",
@@ -237,7 +252,8 @@ function piModels(providerId: string, baseUrl: string): SetupFile {
       "{",
       '  "providers": {',
       `    "${providerId}": {`,
-      `      "baseUrl": "${baseUrl}"`,
+      `      "baseUrl": "${baseUrl}"${modelId ? "," : ""}`,
+      ...(modelId ? [`      "models": [{ "id": "${modelId}" }]`] : []),
       "    }",
       "  }",
       "}",
@@ -770,6 +786,65 @@ function findCustomTemplate(
 }
 
 /**
+ * The note shown whenever a custom target's wire format is "raw" — the
+ * student said they were not sure, so every capture falls back to a JSON
+ * dump. Every custom-target route says this the same way, so it is written
+ * once here rather than copied into each one.
+ */
+const RAW_WIRE_FORMAT_NOTE =
+  'You picked "not sure" for the wire format, so every capture falls ' +
+  "back to a raw JSON dump instead of a fully rendered one. That is " +
+  "not broken — it is just less readable. Run with --force and pick a " +
+  "format once you know it, and the readable renderer takes over.";
+
+/**
+ * Whether a custom target for this agent and wire format needs a model
+ * declared up front, rather than being able to start against a bare base
+ * URL. The single source of truth both the wizard (config.ts, deciding
+ * whether to bother discovering one) and resolveCustomTarget (deciding
+ * whether to require one) consult, so a third agent that needs this only
+ * ever means one edit, here.
+ *
+ * - OpenCode only needs one for its OpenAI-compatible route: that is the
+ *   one built from an ephemeral provider with no catalogue entry to borrow
+ *   a model from. Its Anthropic-compatible route borrows a real Anthropic
+ *   provider instead, whose model names are real Anthropic model names.
+ * - Pi needs one on every route: every one of its custom targets overrides
+ *   an existing built-in provider (openai or anthropic), and that
+ *   provider's built-in model names almost never exist on a self-hosted
+ *   backend, whichever wire format was chosen for rendering.
+ */
+export function customTargetNeedsModel(
+  agentId: string,
+  renderer: RendererId
+): boolean {
+  if (agentId === "pi") return true;
+  if (agentId === "opencode") return renderer === "openai";
+  return false;
+}
+
+/**
+ * Read the model the wizard asked for, or the error both routes that need
+ * one return when it is missing — a remembered choice saved before this
+ * field existed, say, or one edited by hand. Shared so the two routes that
+ * call customTargetNeedsModel report the same shape of error, differing
+ * only in which target they name.
+ */
+function resolveCustomModel(
+  choice: AgentChoice,
+  targetLabel: string
+): { kind: "model"; model: string } | ResolveError {
+  const model = choice.customModel?.trim();
+  if (!model) {
+    return {
+      kind: "error",
+      message: `${targetLabel} needs a model ID. Run with --force to choose again.`,
+    };
+  }
+  return { kind: "model", model };
+}
+
+/**
  * Build a target from what the student typed, in place of a catalogue
  * lookup. The only facts on hand are the base URL and the wire format they
  * chose; everything else is borrowed from the closest matching catalogue
@@ -802,18 +877,16 @@ function resolveCustomTarget(
   const template = findCustomTemplate(agent, renderer);
   const baseUrl = `http://localhost:${port}${template?.suffix ?? ""}`;
 
-  if (agent.id === "opencode" && renderer === "openai") {
-    if (!choice.customModel || choice.customModel.trim().length === 0) {
-      return {
-        kind: "error",
-        message:
-          "OpenCode's custom OpenAI-compatible target needs a model ID. " +
-          "Run with --force to choose again.",
-      };
-    }
+  if (agent.id === "opencode" && customTargetNeedsModel(agent.id, renderer)) {
+    const modelResult = resolveCustomModel(
+      choice,
+      "OpenCode's custom OpenAI-compatible target"
+    );
+    if (modelResult.kind === "error") return modelResult;
+    const { model } = modelResult;
 
     const providerId = "request-logger";
-    const selectedModel = `${providerId}/${choice.customModel}`;
+    const selectedModel = `${providerId}/${model}`;
     const config = JSON.stringify({
       model: selectedModel,
       small_model: selectedModel,
@@ -822,7 +895,7 @@ function resolveCustomTarget(
           npm: "@ai-sdk/openai-compatible",
           name: "Request Logger",
           options: { baseURL: baseUrl },
-          models: { [choice.customModel]: { name: choice.customModel } },
+          models: { [model]: { name: model } },
         },
       },
     });
@@ -845,20 +918,74 @@ function resolveCustomTarget(
     };
   }
 
+  /**
+   * Pi's custom target, on every wire format — unlike OpenCode's branch
+   * above, which only fires for the OpenAI-compatible choice. Pi always
+   * writes a models.json override for a custom base URL (see piModels), and
+   * that override always replaces one of Pi's built-in providers, whose
+   * built-in model names (gpt-4o, claude-*) almost never exist on a
+   * self-hosted backend regardless of which wire format the student picked
+   * for rendering. So a model is required here every time, not just for one
+   * renderer.
+   */
+  if (agent.id === "pi" && customTargetNeedsModel(agent.id, renderer)) {
+    const modelResult = resolveCustomModel(choice, "Pi's custom target");
+    if (modelResult.kind === "error") return modelResult;
+    const { model } = modelResult;
+
+    // template is the anthropic or openai Pi provider entry (see
+    // findCustomTemplate). Every renderer this branch can be reached with
+    // ("openai", "anthropic", "raw") has a Pi provider tagged for it — see
+    // the catalogue above — so this can only be missing if a future wire
+    // format is added there without a matching Pi template.
+    if (!template) {
+      return {
+        kind: "error",
+        message:
+          `Pi has no custom-target template for the "${renderer}" wire ` +
+          `format. Run with --force to choose again.`,
+      };
+    }
+    // template.id is the provider key Pi's built-in catalogue uses, which
+    // is also the key this override replaces.
+    const providerId = template.id;
+    const notes = [
+      `This models.json entry replaces Pi's built-in "${providerId}" model ` +
+        "catalogue with the one model you selected, since Pi's built-in " +
+        "model names almost never exist on a custom server.",
+    ];
+    if (renderer === "anthropic") {
+      notes.push(
+        "Model discovery only checks the OpenAI-style /v1/models listing " +
+          "endpoint, which an Anthropic-compatible server often does not " +
+          "expose. If discovery found nothing here and you typed the model " +
+          "ID by hand, that is expected — it does not mean the ID is wrong."
+      );
+    }
+    if (renderer === "raw") notes.push(RAW_WIRE_FORMAT_NOTE);
+
+    return {
+      kind: "custom-target",
+      agent: agent.id,
+      agentLabel: agent.label,
+      providerLabel: CUSTOM_LABEL,
+      upstreamBaseUrl: upstream.origin,
+      renderer,
+      baseUrl,
+      command: buildCommand(template, baseUrl),
+      setup: [piModels(providerId, baseUrl, model)],
+      notes,
+      warnings: template.warnings ?? [],
+    };
+  }
+
   const notes = [
     `This command is built from ${agent.label}'s own setup pattern, since a ` +
       `custom target has no dedicated one of its own. If a note below assumes ` +
       `a specific login or account, it may not apply to your target.`,
     ...(template?.notes ?? []),
   ];
-  if (renderer === "raw") {
-    notes.push(
-      'You picked "not sure" for the wire format, so every capture falls ' +
-        "back to a raw JSON dump instead of a fully rendered one. That is " +
-        "not broken — it is just less readable. Run with --force and pick a " +
-        "format once you know it, and the readable renderer takes over."
-    );
-  }
+  if (renderer === "raw") notes.push(RAW_WIRE_FORMAT_NOTE);
 
   return {
     kind: "custom-target",

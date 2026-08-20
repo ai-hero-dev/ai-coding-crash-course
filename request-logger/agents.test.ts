@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   agentProviders,
   CUSTOM_ID,
+  customTargetNeedsModel,
   ISSUE_URL,
   listAgents,
   listProviders,
@@ -939,12 +940,13 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     expect(result.command).toContain("OPENAI_BASE_URL=");
   });
 
-  it("borrows Pi's OpenAI models file for an openai-compatible custom target", () => {
+  it("borrows Pi's OpenAI provider key for an openai-compatible custom target", () => {
     const result = customTarget({
       agent: "pi",
       provider: CUSTOM_ID,
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "qwen3:8b",
     });
     expect(result.setup[0].body).toContain('"openai"');
     expect(result.setup[0].body).not.toContain('"openai-codex"');
@@ -956,8 +958,99 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       provider: CUSTOM_ID,
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "qwen3:8b",
     });
     expect(result.setup).toHaveLength(1);
+  });
+
+  it("requires a remembered model for every Pi custom target, not just one wire format", () => {
+    for (const customRenderer of ["openai", "anthropic", "raw"] as const) {
+      const result = resolveChoice(
+        {
+          agent: "pi",
+          provider: CUSTOM_ID,
+          customBaseUrl: "http://localhost:11434",
+          customRenderer,
+        },
+        PORT
+      );
+      expect(result.kind).toBe("error");
+      expect(result.kind === "error" && result.message).toContain("--force");
+    }
+  });
+
+  it("writes the selected model into Pi's models file, replacing its built-in catalogue", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    const written = JSON.parse(result.setup[0].body);
+    expect(written.providers.openai).toEqual({
+      baseUrl: "http://localhost:8787/v1",
+      models: [{ id: "qwen3:8b" }],
+    });
+  });
+
+  it("writes Pi's Anthropic provider key for an anthropic-compatible custom target, with the selected model", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "llama3.1:8b",
+    });
+    const written = JSON.parse(result.setup[0].body);
+    expect(written.providers.anthropic).toEqual({
+      baseUrl: "http://localhost:8787",
+      models: [{ id: "llama3.1:8b" }],
+    });
+  });
+
+  it("warns an Anthropic-compatible Pi custom target that discovery may find nothing, since /v1/models is OpenAI-shaped", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "llama3.1:8b",
+    });
+    expect(result.notes.join(" ")).toContain("/v1/models");
+  });
+
+  it("gives an openai-compatible Pi custom target no discovery caveat, since that is exactly what discovery checks", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    expect(result.notes.join(" ")).not.toContain("/v1/models");
+  });
+
+  it("gives Pi a bare command for a custom target too, since Pi has no base URL variable", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    expect(result.command).toBe("pi");
+  });
+
+  it("does not carry Pi's built-in-catalogue note into a custom target, since that note is no longer true there", () => {
+    const result = customTarget({
+      agent: "pi",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    expect(result.notes.join(" ")).not.toContain("whole built-in model list");
   });
 
   it("reuses Claude Code's own template regardless of the wire format chosen, since it has only one", () => {
@@ -993,6 +1086,28 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     });
     expect(result.command).not.toContain("/backend-api/codex");
     expect(result.baseUrl).toBe("http://localhost:8787/v1");
+  });
+});
+
+describe("customTargetNeedsModel", () => {
+  it("needs a model for Pi on every wire format", () => {
+    expect(customTargetNeedsModel("pi", "openai")).toBe(true);
+    expect(customTargetNeedsModel("pi", "anthropic")).toBe(true);
+    expect(customTargetNeedsModel("pi", "raw")).toBe(true);
+  });
+
+  it("needs a model for OpenCode only on the OpenAI-compatible wire format", () => {
+    expect(customTargetNeedsModel("opencode", "openai")).toBe(true);
+    expect(customTargetNeedsModel("opencode", "anthropic")).toBe(false);
+    expect(customTargetNeedsModel("opencode", "raw")).toBe(false);
+  });
+
+  it("needs no model for any other agent, on any wire format", () => {
+    for (const renderer of ["openai", "anthropic", "raw"] as const) {
+      expect(customTargetNeedsModel("codex", renderer)).toBe(false);
+      expect(customTargetNeedsModel("claude-code", renderer)).toBe(false);
+      expect(customTargetNeedsModel("omp", renderer)).toBe(false);
+    }
   });
 });
 

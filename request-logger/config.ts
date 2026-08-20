@@ -10,8 +10,9 @@
  * The one documented exception is a custom base URL. It has no catalogue
  * entry to re-derive from — the student typed it — so for that choice only,
  * the base URL and wire format are saved alongside the agent and provider.
- * OpenCode's custom OpenAI-compatible route also saves its selected model.
- * Every other choice keeps behaving exactly as described above.
+ * OpenCode's custom OpenAI-compatible route, and every one of Pi's custom
+ * routes, also save their selected model. Every other choice keeps behaving
+ * exactly as described above.
  *
  * This is glue, not logic. The decisions all live in agents.ts, which is where
  * the tests are.
@@ -24,6 +25,7 @@ import {
   agentProviders,
   CUSTOM_ID,
   CUSTOM_LABEL,
+  customTargetNeedsModel,
   listAgents,
   OTHER_ID,
   OTHER_LABEL,
@@ -173,7 +175,14 @@ async function askModelIdManually(): Promise<string> {
   return model.trim();
 }
 
-async function askOpenCodeModel(baseUrl: string): Promise<string> {
+/**
+ * Discover the model IDs a custom base URL serves, and ask which one to use
+ * when there is a real choice — shared by every custom target that needs a
+ * model declared up front: OpenCode's custom OpenAI-compatible route, and
+ * every one of Pi's custom routes. Same shape both times: discover, offer a
+ * choice when there is more than one candidate, fall back to manual entry.
+ */
+async function askDiscoveredModel(baseUrl: string): Promise<string> {
   const modelIds = await discoverModelIds(baseUrl);
   if (modelIds.length === 0) {
     console.warn(
@@ -196,7 +205,7 @@ async function askOpenCodeModel(baseUrl: string): Promise<string> {
   const manual: ModelSelection = { kind: "manual" };
   const selected = stopIfCancelled(
     await select<ModelSelection>({
-      message: "Which model do you want OpenCode to use?",
+      message: "Which model do you want to use?",
       options: [
         ...modelIds.map((id) => ({
           value: { kind: "model" as const, id },
@@ -288,10 +297,9 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
         provider: CUSTOM_ID,
         customBaseUrl: custom.baseUrl,
         customRenderer: custom.renderer,
-        customModel:
-          agentId === "opencode" && custom.renderer === "openai"
-            ? await askOpenCodeModel(custom.baseUrl)
-            : undefined,
+        customModel: customTargetNeedsModel(agentId, custom.renderer)
+          ? await askDiscoveredModel(custom.baseUrl)
+          : undefined,
       };
     } else {
       choice = { agent: agentId, provider: providerId };

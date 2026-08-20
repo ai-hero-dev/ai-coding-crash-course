@@ -1,4 +1,10 @@
-/** OpenAI-compatible model discovery for the narrow OpenCode custom-target flow. */
+/**
+ * OpenAI-compatible model discovery for a custom base URL — the unauthenticated
+ * `/v1/models` listing endpoint most local and third-party model servers
+ * expose. Agent-agnostic on purpose: OpenCode's custom OpenAI-compatible
+ * route and Pi's custom routes both need a real model ID up front, and both
+ * discover it the same way.
+ */
 
 export const MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
 
