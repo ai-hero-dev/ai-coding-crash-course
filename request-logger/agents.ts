@@ -35,7 +35,11 @@ export interface AgentChoice {
   customBaseUrl?: string;
   /** Only set when provider is CUSTOM_ID: the wire format they chose for it. */
   customRenderer?: RendererId;
-  /** Selected model for OpenCode's custom OpenAI-compatible route. */
+  /**
+   * Selected model for a custom target that needs one declared up front:
+   * OpenCode's custom OpenAI-compatible route, and any of Pi's custom
+   * routes (see resolveCustomTarget).
+   */
   customModel?: string;
 }
 
@@ -228,8 +232,19 @@ const PI_NOTE =
  * Pi's provider override file. The key is `baseUrl`, in this exact spelling.
  * Pi accepts other spellings into the file and then refuses to start, so this
  * is worth getting right for the student.
+ *
+ * `modelId`, when given, is written as a one-entry `models` array under the
+ * same provider. Pi replaces that provider's whole built-in model catalogue
+ * with whatever `models` lists — see resolveCustomTarget's Pi branch, which
+ * is the only caller that passes it. Omitted, as it is for every catalogue
+ * entry above, Pi keeps its built-in catalogue for that provider, which is
+ * correct there because those routes really do talk to Anthropic or OpenAI.
  */
-function piModels(providerId: string, baseUrl: string): SetupFile {
+function piModels(
+  providerId: string,
+  baseUrl: string,
+  modelId?: string
+): SetupFile {
   return {
     path: "~/.pi/agent/models.json",
     language: "json",
@@ -237,7 +252,8 @@ function piModels(providerId: string, baseUrl: string): SetupFile {
       "{",
       '  "providers": {',
       `    "${providerId}": {`,
-      `      "baseUrl": "${baseUrl}"`,
+      `      "baseUrl": "${baseUrl}"${modelId ? "," : ""}`,
+      ...(modelId ? [`      "models": [{ "id": "${modelId}" }]`] : []),
       "    }",
       "  }",
       "}",
@@ -842,6 +858,58 @@ function resolveCustomTarget(
           "configuration for this run only; your config file is not changed.",
       ],
       warnings: [],
+    };
+  }
+
+  /**
+   * Pi's custom target, on every wire format — unlike OpenCode's branch
+   * above, which only fires for the OpenAI-compatible choice. Pi always
+   * writes a models.json override for a custom base URL (see piModels), and
+   * that override always replaces one of Pi's built-in providers, whose
+   * built-in model names (gpt-4o, claude-*) almost never exist on a
+   * self-hosted backend regardless of which wire format the student picked
+   * for rendering. So a model is required here every time, not just for one
+   * renderer.
+   */
+  if (agent.id === "pi") {
+    if (!choice.customModel || choice.customModel.trim().length === 0) {
+      return {
+        kind: "error",
+        message:
+          "Pi's custom target needs a model ID. Run with --force to choose again.",
+      };
+    }
+
+    // template is the anthropic or openai Pi provider entry (see
+    // findCustomTemplate) — its id is the provider key Pi's built-in
+    // catalogue uses, which is also the key this override replaces.
+    const providerId = template?.id ?? "custom";
+    const notes = [
+      `This models.json entry replaces Pi's built-in "${providerId}" model ` +
+        "catalogue with the one model you selected, since Pi's built-in " +
+        "model names almost never exist on a custom server.",
+    ];
+    if (renderer === "raw") {
+      notes.push(
+        'You picked "not sure" for the wire format, so every capture falls ' +
+          "back to a raw JSON dump instead of a fully rendered one. That is " +
+          "not broken — it is just less readable. Run with --force and pick a " +
+          "format once you know it, and the readable renderer takes over."
+      );
+    }
+
+    return {
+      kind: "custom-target",
+      agent: agent.id,
+      agentLabel: agent.label,
+      providerLabel: CUSTOM_LABEL,
+      upstreamBaseUrl: upstream.origin,
+      renderer,
+      baseUrl,
+      command: template ? buildCommand(template, baseUrl) : agent.id,
+      setup: [piModels(providerId, baseUrl, choice.customModel)],
+      notes,
+      warnings: template?.warnings ?? [],
     };
   }
 

@@ -42,13 +42,21 @@ If you are not sure, pick "not sure". The tool still logs everything; it just
 shows you the raw JSON instead of a fully readable render, because it cannot
 safely guess a shape you did not tell it. See "What you get" below.
 
-For **OpenCode** with an **OpenAI-compatible** custom target, the wizard also
-tries the unauthenticated `/v1/models` endpoint and offers any model IDs it
-finds. You can always enter an ID manually, and the wizard falls back to manual
-entry if discovery fails. Endpoints that require credentials for model listing
-are not supported. The printed command uses a temporary
-`OPENCODE_CONFIG_CONTENT` provider for that one run, merged with your existing
-OpenCode configuration without editing its file.
+For **OpenCode** with an **OpenAI-compatible** custom target, and for **every**
+**Pi** custom target, the wizard also tries the unauthenticated `/v1/models`
+endpoint and offers any model IDs it finds. You can always enter an ID
+manually, and the wizard falls back to manual entry if discovery fails.
+Endpoints that require credentials for model listing are not supported.
+
+- OpenCode's printed command uses a temporary `OPENCODE_CONFIG_CONTENT`
+  provider for that one run, merged with your existing OpenCode configuration
+  without editing its file.
+- Pi has no such temporary option, so the selected model is written into
+  `~/.pi/agent/models.json` alongside the base URL, replacing that provider's
+  built-in model list with the one you chose. Without this, Pi would keep
+  offering its built-in model names (`gpt-4o`, and the like), which almost
+  never exist on a custom server — the agent would start but every turn would
+  fail.
 
 To change a remembered answer:
 
@@ -74,10 +82,11 @@ you having to clear anything.
 The one exception is a **Custom base URL** answer. There is no catalogue entry
 for it to be worked out from — you typed it — so the base URL and the wire
 format you chose are saved in the file too, alongside your choice. OpenCode's
-OpenAI-compatible custom route also saves the selected model ID, so a remembered
-choice starts without repeating discovery. Everything else about a custom
-answer still behaves the same way: change it any time with `--force`, and it is
-never kept for an agent that cannot be logged.
+OpenAI-compatible custom route, and every Pi custom route, also save the
+selected model ID, so a remembered choice starts without repeating discovery.
+Everything else about a custom answer still behaves the same way: change it
+any time with `--force`, and it is never kept for an agent that cannot be
+logged.
 
 ## The agents
 
