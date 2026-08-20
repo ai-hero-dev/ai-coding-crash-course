@@ -39,6 +39,7 @@ describe("upstreamConnection", () => {
         provider: "custom",
         customBaseUrl: "https://api.deepseek.com",
         customRenderer: "openai",
+        customModel: "test-model",
       },
       PORT
     );

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import {
   agentProviders,
   CUSTOM_ID,
@@ -88,7 +89,9 @@ describe("listAgents", () => {
 
   it("puts every agent that can be logged above every agent that cannot", () => {
     const supported = listAgents().map((agent) => agent.supported);
-    expect(supported.indexOf(false)).toBeGreaterThan(supported.lastIndexOf(true));
+    expect(supported.indexOf(false)).toBeGreaterThan(
+      supported.lastIndexOf(true)
+    );
   });
 
   it("marks Cursor as unsupported", () => {
@@ -164,7 +167,9 @@ describe("listProviders", () => {
 describe("agentProviders", () => {
   it("returns the one provider a single-provider agent has, unlike listProviders", () => {
     expect(listProviders("claude-code")).toEqual([]);
-    expect(agentProviders("claude-code").map((p) => p.id)).toEqual(["anthropic"]);
+    expect(agentProviders("claude-code").map((p) => p.id)).toEqual([
+      "anthropic",
+    ]);
   });
 
   it("returns the one provider Copilot has too", () => {
@@ -207,7 +212,9 @@ describe("resolveChoice — upstream hosts", () => {
   });
 
   it("sends OpenCode on Anthropic to Anthropic", () => {
-    expect(target("opencode", "anthropic").upstreamHost).toBe("api.anthropic.com");
+    expect(target("opencode", "anthropic").upstreamHost).toBe(
+      "api.anthropic.com"
+    );
   });
 
   it("sends OpenCode on OpenAI to OpenAI", () => {
@@ -307,7 +314,9 @@ describe("resolveChoice — base URLs", () => {
   it("gives Pi on a ChatGPT subscription the /backend-api suffix", () => {
     // Pi appends /codex/responses itself, and the real endpoint sits under
     // /backend-api. Without the suffix the forwarded path loses that segment.
-    expect(target("pi", "codex").baseUrl).toBe("http://localhost:8787/backend-api");
+    expect(target("pi", "codex").baseUrl).toBe(
+      "http://localhost:8787/backend-api"
+    );
   });
 
   it("uses the port it is given", () => {
@@ -428,7 +437,9 @@ describe("resolveChoice — setup files", () => {
   });
 
   it("gives Pi its models file, because Pi has no variable to set", () => {
-    expect(target("pi", "anthropic").setup[0].path).toBe("~/.pi/agent/models.json");
+    expect(target("pi", "anthropic").setup[0].path).toBe(
+      "~/.pi/agent/models.json"
+    );
   });
 
   it("uses Pi's exact spelling of the base URL key", () => {
@@ -465,7 +476,9 @@ describe("resolveChoice — setup files", () => {
 
 describe("resolveChoice — notes and warnings", () => {
   it("explains the tool search flag to a Claude Code student", () => {
-    expect(target("claude-code").notes.join(" ")).toContain("ENABLE_TOOL_SEARCH");
+    expect(target("claude-code").notes.join(" ")).toContain(
+      "ENABLE_TOOL_SEARCH"
+    );
   });
 
   it("tells a Codex student the flag does not touch their config file", () => {
@@ -531,9 +544,9 @@ describe("resolveChoice — refusals", () => {
 
 describe("shouldLogRequest", () => {
   it("logs a real Anthropic turn", () => {
-    expect(shouldLogRequest("POST", "/v1/messages?beta=true", "anthropic")).toBe(
-      true
-    );
+    expect(
+      shouldLogRequest("POST", "/v1/messages?beta=true", "anthropic")
+    ).toBe(true);
   });
 
   it("drops Anthropic token counting", () => {
@@ -580,20 +593,24 @@ describe("shouldLogRequest", () => {
 
   it("drops Gemini token counting, which has its own name", () => {
     expect(
-      shouldLogRequest("POST", "/v1beta/models/gemini-2.5-pro:countTokens", "gemini")
+      shouldLogRequest(
+        "POST",
+        "/v1beta/models/gemini-2.5-pro:countTokens",
+        "gemini"
+      )
     ).toBe(false);
   });
 
   it("drops the Google login housekeeping calls, which carry no prompt", () => {
-    expect(shouldLogRequest("POST", "/v1internal:loadCodeAssist", "gemini")).toBe(
-      false
-    );
-    expect(shouldLogRequest("POST", "/v1internal:retrieveUserQuota", "gemini")).toBe(
-      false
-    );
-    expect(shouldLogRequest("POST", "/v1internal:listExperiments", "gemini")).toBe(
-      false
-    );
+    expect(
+      shouldLogRequest("POST", "/v1internal:loadCodeAssist", "gemini")
+    ).toBe(false);
+    expect(
+      shouldLogRequest("POST", "/v1internal:retrieveUserQuota", "gemini")
+    ).toBe(false);
+    expect(
+      shouldLogRequest("POST", "/v1internal:listExperiments", "gemini")
+    ).toBe(false);
     expect(
       shouldLogRequest("POST", "/v1internal:recordCodeAssistMetrics", "gemini")
     ).toBe(false);
@@ -620,9 +637,9 @@ describe("resolveChoice — bad input", () => {
   });
 
   it("rejects an unknown provider", () => {
-    expect(resolveChoice({ agent: "opencode", provider: "cohere" }, PORT).kind).toBe(
-      "error"
-    );
+    expect(
+      resolveChoice({ agent: "opencode", provider: "cohere" }, PORT).kind
+    ).toBe("error");
   });
 
   it("accepts a single-provider agent with no provider given", () => {
@@ -652,6 +669,7 @@ describe("resolveChoice — custom base URL", () => {
       provider: CUSTOM_ID,
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "test-model",
     });
     expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
   });
@@ -662,6 +680,7 @@ describe("resolveChoice — custom base URL", () => {
       provider: CUSTOM_ID,
       customBaseUrl: "https://api.deepseek.com",
       customRenderer: "openai",
+      customModel: "test-model",
     });
     expect(result.upstreamBaseUrl).toBe("https://api.deepseek.com");
   });
@@ -672,13 +691,18 @@ describe("resolveChoice — custom base URL", () => {
       provider: CUSTOM_ID,
       customBaseUrl: "https://api.deepseek.com/v1/some/path",
       customRenderer: "openai",
+      customModel: "test-model",
     });
     expect(result.upstreamBaseUrl).toBe("https://api.deepseek.com");
   });
 
   it("rejects a base URL with no scheme", () => {
     const result = resolveChoice(
-      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "localhost:11434" },
+      {
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "localhost:11434",
+      },
       PORT
     );
     expect(result.kind).toBe("error");
@@ -694,7 +718,11 @@ describe("resolveChoice — custom base URL", () => {
 
   it("rejects a base URL with an unrelated scheme", () => {
     const result = resolveChoice(
-      { agent: "opencode", provider: CUSTOM_ID, customBaseUrl: "ftp://example.com" },
+      {
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "ftp://example.com",
+      },
       PORT
     );
     expect(result.kind).toBe("error");
@@ -717,7 +745,10 @@ describe("resolveChoice — custom base URL", () => {
   });
 
   it("rejects a custom choice with no base URL at all", () => {
-    const result = resolveChoice({ agent: "opencode", provider: CUSTOM_ID }, PORT);
+    const result = resolveChoice(
+      { agent: "opencode", provider: CUSTOM_ID },
+      PORT
+    );
     expect(result.kind).toBe("error");
   });
 
@@ -737,6 +768,7 @@ describe("resolveChoice — custom base URL", () => {
         provider: CUSTOM_ID,
         customBaseUrl: "http://localhost:11434",
         customRenderer: "openai",
+        customModel: "test-model",
       }).renderer
     ).toBe("openai");
   });
@@ -780,6 +812,7 @@ describe("resolveChoice — custom base URL", () => {
         provider: CUSTOM_ID,
         customBaseUrl: "http://localhost:11434",
         customRenderer: "openai",
+        customModel: "test-model",
       }).providerLabel
     ).toBe("Custom base URL");
   });
@@ -790,12 +823,83 @@ describe("resolveChoice — custom base URL", () => {
       provider: CUSTOM_ID,
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "test-model",
     });
     expect(result).not.toHaveProperty("provider");
   });
 });
 
 describe("resolveChoice — custom base URL, per-agent command template", () => {
+  it("builds a one-run OpenCode provider config for the OpenAI-compatible route", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    const assignment = result.command.slice(0, -" opencode".length);
+    const serialized = execFileSync(
+      "/bin/sh",
+      [
+        "-c",
+        `${assignment} node -e 'process.stdout.write(process.env.OPENCODE_CONFIG_CONTENT)'`,
+      ],
+      { encoding: "utf8" }
+    );
+    const config = JSON.parse(serialized);
+
+    expect(config.provider["request-logger"]).toEqual({
+      npm: "@ai-sdk/openai-compatible",
+      name: "Request Logger",
+      options: { baseURL: "http://localhost:8787/v1" },
+      models: { "qwen3:8b": { name: "qwen3:8b" } },
+    });
+    expect(config.model).toBe("request-logger/qwen3:8b");
+    expect(config.small_model).toBe("request-logger/qwen3:8b");
+    expect(result.setup).toEqual([]);
+  });
+
+  it("shell-quotes a model ID containing quotes and metacharacters", () => {
+    const model = `model ' "$HOME"; printf INJECTED`;
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: model,
+    });
+    const assignment = result.command.slice(0, -" opencode".length);
+    const serialized = execFileSync(
+      "/bin/sh",
+      [
+        "-c",
+        `${assignment} node -e 'process.stdout.write(process.env.OPENCODE_CONFIG_CONTENT)'`,
+      ],
+      { encoding: "utf8" }
+    );
+    const config = JSON.parse(serialized);
+
+    expect(config.model).toBe(`request-logger/${model}`);
+    expect(config.provider["request-logger"].models).toEqual({
+      [model]: { name: model },
+    });
+  });
+
+  it("requires a remembered model for specialized OpenCode custom targets", () => {
+    const result = resolveChoice(
+      {
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "openai",
+      },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+    expect(result.kind === "error" && result.message).toContain("--force");
+  });
+
   it("borrows OpenCode's Anthropic env var and config file for an anthropic-compatible custom target", () => {
     // The env var and the config file both point the agent at the proxy's own
     // address (http://localhost:8787), not at the upstream the student typed
@@ -806,19 +910,23 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
     });
-    expect(result.command).toContain("ANTHROPIC_BASE_URL=http://localhost:8787/v1");
+    expect(result.command).toContain(
+      "ANTHROPIC_BASE_URL=http://localhost:8787/v1"
+    );
     expect(result.setup[0].path).toBe("~/.config/opencode/opencode.json");
     expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
   });
 
-  it("borrows OpenCode's OpenAI env var for an openai-compatible custom target", () => {
+  it("uses OpenCode's temporary config for an openai-compatible custom target", () => {
     const result = customTarget({
       agent: "opencode",
       provider: CUSTOM_ID,
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "test-model",
     });
-    expect(result.command).toContain("OPENAI_BASE_URL=http://localhost:8787/v1");
+    expect(result.command).toContain("OPENCODE_CONFIG_CONTENT=");
+    expect(result.setup).toEqual([]);
   });
 
   it("defaults OpenCode's raw/not-sure custom target to the OpenAI template", () => {
@@ -859,7 +967,9 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       customBaseUrl: "http://localhost:11434",
       customRenderer: "raw",
     });
-    expect(result.command).toContain("ANTHROPIC_BASE_URL=http://localhost:8787");
+    expect(result.command).toContain(
+      "ANTHROPIC_BASE_URL=http://localhost:8787"
+    );
     expect(result.command).toContain("claude");
     expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
   });

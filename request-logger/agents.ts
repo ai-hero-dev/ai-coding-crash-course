@@ -25,8 +25,8 @@ export type RendererId = "anthropic" | "openai" | "gemini" | "raw";
 
 /**
  * What the student picked. This, and only this, is what gets saved to disk —
- * except customBaseUrl and customRenderer, which exist only for a custom
- * target and are the one documented exception. See config.ts.
+ * except the custom target fields, which are the one documented exception.
+ * See config.ts.
  */
 export interface AgentChoice {
   agent: string;
@@ -35,6 +35,8 @@ export interface AgentChoice {
   customBaseUrl?: string;
   /** Only set when provider is CUSTOM_ID: the wire format they chose for it. */
   customRenderer?: RendererId;
+  /** Selected model for OpenCode's custom OpenAI-compatible route. */
+  customModel?: string;
 }
 
 export interface ResolvedTarget {
@@ -109,11 +111,7 @@ export interface SetupRequest {
 }
 
 export type Resolution =
-  | ResolvedTarget
-  | CustomTarget
-  | AgentRefusal
-  | ResolveError
-  | SetupRequest;
+  ResolvedTarget | CustomTarget | AgentRefusal | ResolveError | SetupRequest;
 
 /**
  * The last option in both questions.
@@ -514,7 +512,7 @@ const AGENTS: AgentEntry[] = [
           {
             path: "~/.pi/agent/settings.json",
             language: "json",
-            body: ['{', '  "transport": "sse"', "}"].join("\n"),
+            body: ["{", '  "transport": "sse"', "}"].join("\n"),
           },
         ],
         notes: [
@@ -711,11 +709,18 @@ export function shouldLogRequest(
 
 function buildCommand(provider: ProviderEntry, baseUrl: string): string {
   const fill = (text: string) => text.replace(/\{baseUrl\}/g, baseUrl);
-  const env = (provider.env ?? []).map(([key, value]) => `${key}=${fill(value)}`);
+  const env = (provider.env ?? []).map(
+    ([key, value]) => `${key}=${fill(value)}`
+  );
   // Arguments take the base URL too. Codex has no variable for it, so its
   // whole override arrives as a flag.
   const args = (provider.args ?? []).map(fill);
   return [...env, provider.bin, ...args].join(" ");
+}
+
+/** Quote one complete POSIX shell argument, including embedded single quotes. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 /**
@@ -796,6 +801,49 @@ function resolveCustomTarget(
   const renderer: RendererId = choice.customRenderer ?? "raw";
   const template = findCustomTemplate(agent, renderer);
   const baseUrl = `http://localhost:${port}${template?.suffix ?? ""}`;
+
+  if (agent.id === "opencode" && renderer === "openai") {
+    if (!choice.customModel || choice.customModel.trim().length === 0) {
+      return {
+        kind: "error",
+        message:
+          "OpenCode's custom OpenAI-compatible target needs a model ID. " +
+          "Run with --force to choose again.",
+      };
+    }
+
+    const providerId = "request-logger";
+    const selectedModel = `${providerId}/${choice.customModel}`;
+    const config = JSON.stringify({
+      model: selectedModel,
+      small_model: selectedModel,
+      provider: {
+        [providerId]: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Request Logger",
+          options: { baseURL: baseUrl },
+          models: { [choice.customModel]: { name: choice.customModel } },
+        },
+      },
+    });
+
+    return {
+      kind: "custom-target",
+      agent: agent.id,
+      agentLabel: agent.label,
+      providerLabel: CUSTOM_LABEL,
+      upstreamBaseUrl: upstream.origin,
+      renderer,
+      baseUrl,
+      command: `OPENCODE_CONFIG_CONTENT=${shellQuote(config)} opencode`,
+      setup: [],
+      notes: [
+        "This temporary provider is merged with your existing OpenCode " +
+          "configuration for this run only; your config file is not changed.",
+      ],
+      warnings: [],
+    };
+  }
 
   const notes = [
     `This command is built from ${agent.label}'s own setup pattern, since a ` +

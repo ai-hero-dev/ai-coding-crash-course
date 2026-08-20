@@ -5,7 +5,7 @@ model provider's API, and writes a **readable Markdown document for every
 request**: the real system prompt, the tool definitions, and the messages your
 agent sends to the model.
 
-It was built for the AI Coding Crash Course so that you can *see* what actually
+It was built for the AI Coding Crash Course so that you can _see_ what actually
 goes over the wire.
 
 ## Run it
@@ -42,6 +42,14 @@ If you are not sure, pick "not sure". The tool still logs everything; it just
 shows you the raw JSON instead of a fully readable render, because it cannot
 safely guess a shape you did not tell it. See "What you get" below.
 
+For **OpenCode** with an **OpenAI-compatible** custom target, the wizard also
+tries the unauthenticated `/v1/models` endpoint and offers any model IDs it
+finds. You can always enter an ID manually, and the wizard falls back to manual
+entry if discovery fails. Endpoints that require credentials for model listing
+are not supported. The printed command uses a temporary
+`OPENCODE_CONFIG_CONTENT` provider for that one run, merged with your existing
+OpenCode configuration without editing its file.
+
 To change a remembered answer:
 
 ```bash
@@ -65,26 +73,28 @@ you having to clear anything.
 
 The one exception is a **Custom base URL** answer. There is no catalogue entry
 for it to be worked out from — you typed it — so the base URL and the wire
-format you chose are saved in the file too, alongside your choice. Everything
-else about a custom answer still behaves the same way: change it any time with
-`--force`, and it is never kept for an agent that cannot be logged.
+format you chose are saved in the file too, alongside your choice. OpenCode's
+OpenAI-compatible custom route also saves the selected model ID, so a remembered
+choice starts without repeating discovery. Everything else about a custom
+answer still behaves the same way: change it any time with `--force`, and it is
+never kept for an agent that cannot be logged.
 
 ## The agents
 
 The tool prints the correct command for you, so you do not have to copy anything
 from this table. It is here so you can see what is supported before you start.
 
-| Agent            | Works | What you need                                   |
-| ---------------- | ----- | ----------------------------------------------- |
-| Claude Code      | Yes   | One command. Works with a subscription login.    |
-| Codex            | Yes   | One flag. A subscription or an API key works.    |
-| GitHub Copilot   | Yes   | Your normal subscription login.                  |
-| OpenCode         | Yes   | One command, or a config file.                   |
-| Pi               | Yes   | A config file. Pi has no base URL variable.      |
-| OMP              | Yes   | A YAML config file. Point it at any backend.     |
-| Gemini CLI       | Yes   | One command. The free Google login works.        |
-| Cursor CLI       | No    | Nothing can make it work. See below.             |
-| Amp              | No    | Nothing can make it work. See below.             |
+| Agent          | Works | What you need                                 |
+| -------------- | ----- | --------------------------------------------- |
+| Claude Code    | Yes   | One command. Works with a subscription login. |
+| Codex          | Yes   | One flag. A subscription or an API key works. |
+| GitHub Copilot | Yes   | Your normal subscription login.               |
+| OpenCode       | Yes   | One command, or a config file.                |
+| Pi             | Yes   | A config file. Pi has no base URL variable.   |
+| OMP            | Yes   | A YAML config file. Point it at any backend.  |
+| Gemini CLI     | Yes   | One command. The free Google login works.     |
+| Cursor CLI     | No    | Nothing can make it work. See below.          |
+| Amp            | No    | Nothing can make it work. See below.          |
 
 Any other provider — a local model server, or a smaller hosted one — works
 through **Custom base URL**, above, on any agent in this table except Cursor
@@ -124,10 +134,10 @@ the effect off.
 
 Measured through this tool with the same prompt:
 
-| Run                             | Capture size |
-| ------------------------------- | ------------ |
-| Base URL only                    | 63,596 bytes |
-| With `ENABLE_TOOL_SEARCH=true`   | 39,013 bytes |
+| Run                            | Capture size |
+| ------------------------------ | ------------ |
+| Base URL only                  | 63,596 bytes |
+| With `ENABLE_TOOL_SEARCH=true` | 39,013 bytes |
 
 That is 39% smaller, and the tool-search tool appears only in the second
 capture.
@@ -137,11 +147,11 @@ capture.
 Every request writes three files to `request-logger/logs/`, which is gitignored.
 They share a base name such as `2026-07-07T14-32-05-123_claude-code`:
 
-| File            | Contents                                             |
-| --------------- | ---------------------------------------------------- |
-| `.md`           | The readable render. Start here.                     |
-| `.request.txt`  | The request body exactly as it was sent.             |
-| `.response.txt` | The raw response stream.                             |
+| File            | Contents                                 |
+| --------------- | ---------------------------------------- |
+| `.md`           | The readable render. Start here.         |
+| `.request.txt`  | The request body exactly as it was sent. |
+| `.response.txt` | The raw response stream.                 |
 
 The `.md` file uses **XML tags** (`<request>`, `<system-prompt>`, `<tools>`,
 `<messages>`, `<response>`) to mark its sections, because the captured content is

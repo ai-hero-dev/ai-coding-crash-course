@@ -24,7 +24,10 @@ describe("the remembered answer", () => {
 
   it("reads back an agent that has one provider only", () => {
     saveChoice(file, { agent: "claude-code" });
-    expect(loadChoice(file)).toEqual({ agent: "claude-code", provider: undefined });
+    expect(loadChoice(file)).toEqual({
+      agent: "claude-code",
+      provider: undefined,
+    });
   });
 
   it("reports no answer when the file is not there", () => {
@@ -45,12 +48,14 @@ describe("the remembered answer — the custom base URL exception", () => {
       provider: "custom",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "qwen3:8b",
     });
     expect(loadChoice(file)).toEqual({
       agent: "opencode",
       provider: "custom",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "qwen3:8b",
     });
   });
 
@@ -77,9 +82,21 @@ describe("the remembered answer — the custom base URL exception", () => {
   it("ignores a non-string customBaseUrl in a damaged or hand-edited file", () => {
     fs.writeFileSync(
       file,
-      JSON.stringify({ agent: "opencode", provider: "custom", customBaseUrl: 42 })
+      JSON.stringify({
+        agent: "opencode",
+        provider: "custom",
+        customBaseUrl: 42,
+      })
     );
     expect(loadChoice(file)?.customBaseUrl).toBeUndefined();
+  });
+
+  it("ignores a non-string customModel in a damaged or hand-edited file", () => {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ agent: "opencode", provider: "custom", customModel: 42 })
+    );
+    expect(loadChoice(file)?.customModel).toBeUndefined();
   });
 });
 
