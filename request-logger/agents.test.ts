@@ -13,7 +13,7 @@ import {
   type AgentChoice,
 } from "./agents";
 
-const PORT = { port: 8787 };
+const PORT = { port: 8787, platform: "linux" as NodeJS.Platform };
 
 /** Resolve, and fail loudly if the answer was not a usable target. */
 function target(agent: string, provider?: string) {
@@ -321,14 +321,14 @@ describe("resolveChoice — base URLs", () => {
   });
 
   it("uses the port it is given", () => {
-    const result = resolveChoice({ agent: "claude-code" }, { port: 9000 });
+    const result = resolveChoice({ agent: "claude-code" }, { port: 9000, platform: "linux" });
     expect(result.kind === "target" && result.baseUrl).toBe(
       "http://localhost:9000"
     );
   });
 
   it("puts the chosen port into the command", () => {
-    const result = resolveChoice({ agent: "claude-code" }, { port: 9000 });
+    const result = resolveChoice({ agent: "claude-code" }, { port: 9000, platform: "linux" });
     expect(result.kind === "target" && result.command).toContain(
       "http://localhost:9000"
     );
@@ -411,6 +411,58 @@ describe("resolveChoice — commands", () => {
 
   it("gives Pi a bare command, because Pi has no base URL variable", () => {
     expect(target("pi", "anthropic").command).toBe("pi");
+  });
+});
+
+describe("resolveChoice — commands on win32", () => {
+  // A student on native Windows (not WSL, not Git Bash) has no shell that
+  // understands `KEY=value bin` — PowerShell reports it as an unrecognized
+  // command, which is exactly the report that prompted this. PowerShell's
+  // own syntax is one `$env:KEY = 'value'` statement per variable, chained
+  // with semicolons.
+  const WIN = { port: 8787, platform: "win32" as NodeJS.Platform };
+
+  function winTarget(agent: string, provider?: string) {
+    const result = resolveChoice({ agent, provider }, WIN);
+    if (result.kind !== "target") {
+      throw new Error(
+        `expected a target for ${agent}/${provider}, got ${result.kind}`
+      );
+    }
+    return result;
+  }
+
+  it("uses PowerShell $env: syntax instead of POSIX VAR=value", () => {
+    expect(winTarget("claude-code").command).toBe(
+      "$env:ANTHROPIC_BASE_URL = 'http://localhost:8787'; " +
+        "$env:ENABLE_TOOL_SEARCH = 'true'; claude"
+    );
+  });
+
+  it("never prints the POSIX VAR=value form on win32", () => {
+    expect(winTarget("claude-code").command).not.toMatch(
+      /^ANTHROPIC_BASE_URL=/
+    );
+  });
+
+  it("chains one assignment per variable with semicolons", () => {
+    expect(winTarget("copilot").command).toBe(
+      "$env:COPILOT_API_URL = 'http://localhost:8787'; copilot"
+    );
+  });
+
+  it("leaves a command with no env vars unchanged, since there is nothing to rewrite", () => {
+    // Pi has no base URL variable at all.
+    expect(winTarget("pi", "anthropic").command).toBe("pi");
+  });
+
+  it("leaves Codex's flag-based override unchanged", () => {
+    // Codex has no env var override — its whole command is a `-c` flag,
+    // single-quoted. PowerShell parses a single-quoted literal the same way
+    // bash does (no interpolation), so this needs no rewriting.
+    expect(winTarget("codex", "openai").command).toBe(
+      `codex -c 'openai_base_url="http://localhost:8787/v1"'`
+    );
   });
 });
 
@@ -918,6 +970,24 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
   });
 
+  it("uses PowerShell syntax for a borrowed-template custom target on win32", () => {
+    const result = resolveChoice(
+      {
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "anthropic",
+      },
+      { port: 8787, platform: "win32" }
+    );
+    if (result.kind !== "custom-target") {
+      throw new Error(`expected a custom-target, got ${result.kind}`);
+    }
+    expect(result.command).toBe(
+      "$env:ANTHROPIC_BASE_URL = 'http://localhost:8787/v1'; opencode"
+    );
+  });
+
   it("uses OpenCode's temporary config for an openai-compatible custom target", () => {
     const result = customTarget({
       agent: "opencode",
@@ -928,6 +998,45 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     });
     expect(result.command).toContain("OPENCODE_CONFIG_CONTENT=");
     expect(result.setup).toEqual([]);
+  });
+
+  it("uses PowerShell syntax for OpenCode's temporary config on win32", () => {
+    const result = resolveChoice(
+      {
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "openai",
+        customModel: "test-model",
+      },
+      { port: 8787, platform: "win32" }
+    );
+    if (result.kind !== "custom-target") {
+      throw new Error(`expected a custom-target, got ${result.kind}`);
+    }
+    expect(result.command.startsWith("$env:OPENCODE_CONFIG_CONTENT = '")).toBe(
+      true
+    );
+    expect(result.command.endsWith("; opencode")).toBe(true);
+    expect(result.command).not.toContain("OPENCODE_CONFIG_CONTENT=$env");
+    expect(result.command).not.toMatch(/^OPENCODE_CONFIG_CONTENT=/);
+  });
+
+  it("doubles an embedded single quote in the PowerShell-quoted config, since PowerShell has no backslash escape", () => {
+    const result = resolveChoice(
+      {
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "openai",
+        customModel: `model's name`,
+      },
+      { port: 8787, platform: "win32" }
+    );
+    if (result.kind !== "custom-target") {
+      throw new Error(`expected a custom-target, got ${result.kind}`);
+    }
+    expect(result.command).toContain("model''s name");
   });
 
   it("defaults OpenCode's raw/not-sure custom target to the OpenAI template", () => {

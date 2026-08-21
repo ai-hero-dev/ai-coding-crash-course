@@ -79,6 +79,12 @@ To use a different port:
 PORT=9000 npm run request-logger
 ```
 
+On Windows, run that in PowerShell (not Command Prompt) as:
+
+```powershell
+$env:PORT = 9000; npm run request-logger
+```
+
 A remembered answer is kept in `request-logger/.agent-choice.json`, which is
 gitignored. It holds your choice only. The host, the renderer and the command are
 worked out again on every start, so an update to this tool reaches you without
@@ -255,6 +261,13 @@ Be fair to the tool when you judge a failure.
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
   necessarily been driven end to end.
+- **Windows is not tested end to end either.** WSL and Git Bash need no
+  special handling — they are POSIX shells, so they use the same command as
+  Mac and Linux. Native PowerShell gets its own `$env:NAME = 'value'` syntax
+  instead (see `withEnv` in `agents.ts`), verified by unit test but not by
+  running a real agent against it on Windows. Command Prompt (`cmd.exe`) is
+  not supported; use PowerShell, which is the default terminal in Windows
+  Terminal and VS Code.
 
 If one of them is wrong, it is worth reporting, and the fix is likely to be one
 line in `agents.ts`.
