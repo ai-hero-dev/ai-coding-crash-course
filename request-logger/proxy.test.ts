@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { resolveChoice } from "./agents";
 import { upstreamConnection } from "./proxy";
 
-const PORT = { port: 8787 };
+const PORT = { port: 8787, platform: "linux" as NodeJS.Platform };
 
 /** Resolve, and fail loudly if the answer was not something the proxy can route to. */
 function proxyTarget(...args: Parameters<typeof resolveChoice>) {

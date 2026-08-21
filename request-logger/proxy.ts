@@ -318,7 +318,7 @@ async function main(): Promise<void> {
   let choice = force ? null : loadChoice(STATE_FILE);
   if (!choice) choice = await ask(!force);
 
-  let resolution = resolveChoice(choice, { port: PORT });
+  let resolution = resolveChoice(choice, { port: PORT, platform: process.platform });
 
   // A saved choice the catalogue no longer understands is not the student's
   // fault. Ask again rather than making them find the flag.
@@ -327,7 +327,7 @@ async function main(): Promise<void> {
     console.log(`[request-logger] ${resolution.message}`);
     // A saved file exists, so the student already asked to be remembered.
     choice = await ask(false);
-    resolution = resolveChoice(choice, { port: PORT });
+    resolution = resolveChoice(choice, { port: PORT, platform: process.platform });
   }
 
   if (resolution.kind === "error") {

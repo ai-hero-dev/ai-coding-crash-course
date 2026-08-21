@@ -723,20 +723,64 @@ export function shouldLogRequest(
 // Resolution — the seam
 // ---------------------------------------------------------------------------
 
-function buildCommand(provider: ProviderEntry, baseUrl: string): string {
+function buildCommand(
+  provider: ProviderEntry,
+  baseUrl: string,
+  platform: NodeJS.Platform
+): string {
   const fill = (text: string) => text.replace(/\{baseUrl\}/g, baseUrl);
   const env = (provider.env ?? []).map(
-    ([key, value]) => `${key}=${fill(value)}`
+    ([key, value]) => [key, fill(value)] as const
   );
   // Arguments take the base URL too. Codex has no variable for it, so its
   // whole override arrives as a flag.
   const args = (provider.args ?? []).map(fill);
-  return [...env, provider.bin, ...args].join(" ");
+  const bin = [provider.bin, ...args].join(" ");
+  return withEnv(env, bin, platform);
+}
+
+/**
+ * Join one or more `KEY=value` environment assignments onto the command that
+ * needs them, in whichever syntax the student's shell actually understands.
+ *
+ * POSIX shells — bash, zsh, and Windows' own WSL and Git Bash — accept
+ * `KEY=value KEY2=value2 bin` directly, so that is the default this tool has
+ * always printed. Windows' native PowerShell has no such syntax at all: typed
+ * back verbatim, it comes back as "is not recognized as a name of a cmdlet"
+ * (the report that prompted this function). PowerShell instead sets each
+ * variable with its own `$env:KEY = 'value'` statement, chained onto one
+ * line with semicolons the way PowerShell joins statements.
+ */
+function withEnv(
+  env: ReadonlyArray<readonly [string, string]>,
+  bin: string,
+  platform: NodeJS.Platform
+): string {
+  if (env.length === 0) return bin;
+  if (platform === "win32") {
+    return [
+      ...env.map(([key, value]) => `$env:${key} = ${powerShellQuote(value)}`),
+      bin,
+    ].join("; ");
+  }
+  return [...env.map(([key, value]) => `${key}=${value}`), bin].join(" ");
 }
 
 /** Quote one complete POSIX shell argument, including embedded single quotes. */
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Quote one complete PowerShell string literal, including embedded single
+ * quotes (PowerShell escapes those by doubling them, not by backslash).
+ * Single-quoted PowerShell strings do no interpolation at all — unlike
+ * double-quoted ones, where a `$` in a base URL or a JSON config would be
+ * read as the start of a variable — so this is the literal, injection-safe
+ * quoting PowerShell offers.
+ */
+function powerShellQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 /**
@@ -853,7 +897,8 @@ function resolveCustomModel(
 function resolveCustomTarget(
   agent: AgentEntry,
   choice: AgentChoice,
-  port: number
+  port: number,
+  platform: NodeJS.Platform
 ): Resolution {
   if (!choice.customBaseUrl) {
     return {
@@ -908,7 +953,10 @@ function resolveCustomTarget(
       upstreamBaseUrl: upstream.origin,
       renderer,
       baseUrl,
-      command: `OPENCODE_CONFIG_CONTENT=${shellQuote(config)} opencode`,
+      command:
+        platform === "win32"
+          ? `$env:OPENCODE_CONFIG_CONTENT = ${powerShellQuote(config)}; opencode`
+          : `OPENCODE_CONFIG_CONTENT=${shellQuote(config)} opencode`,
       setup: [],
       notes: [
         "This temporary provider is merged with your existing OpenCode " +
@@ -972,7 +1020,7 @@ function resolveCustomTarget(
       upstreamBaseUrl: upstream.origin,
       renderer,
       baseUrl,
-      command: buildCommand(template, baseUrl),
+      command: buildCommand(template, baseUrl, platform),
       setup: [piModels(providerId, baseUrl, model)],
       notes,
       warnings: template.warnings ?? [],
@@ -995,7 +1043,7 @@ function resolveCustomTarget(
     upstreamBaseUrl: upstream.origin,
     renderer,
     baseUrl,
-    command: template ? buildCommand(template, baseUrl) : agent.id,
+    command: template ? buildCommand(template, baseUrl, platform) : agent.id,
     setup: (template?.setup ?? []).map((file) => ({
       ...file,
       body: file.body.replace(/\{baseUrl\}/g, baseUrl),
@@ -1009,12 +1057,16 @@ function resolveCustomTarget(
  * Turn a saved choice into everything the tool needs, or into a clear reason
  * why it cannot.
  *
- * Pure: no disk, no network, no clock. Give it the same choice and the same
- * port and it gives back the same answer.
+ * Pure: no disk, no network, no clock. Give it the same choice, the same
+ * port and the same platform and it gives back the same answer. `platform`
+ * decides only the shell syntax of the printed command — POSIX `KEY=value
+ * bin` everywhere except win32, where PowerShell needs `$env:KEY = 'value'`
+ * statements instead (see withEnv). The caller reads `process.platform`
+ * once and passes it in, the same way it already does for `port`.
  */
 export function resolveChoice(
   choice: AgentChoice,
-  options: { port: number }
+  options: { port: number; platform: NodeJS.Platform }
 ): Resolution {
   const agent = AGENTS.find((a) => a.id === choice.agent);
 
@@ -1052,7 +1104,7 @@ export function resolveChoice(
   // provider question, or because every setup for this agent is custom
   // (alwaysCustom, e.g. OMP), which never shows that question at all.
   if (agent.alwaysCustom || choice.provider === CUSTOM_ID) {
-    return resolveCustomTarget(agent, choice, options.port);
+    return resolveCustomTarget(agent, choice, options.port, options.platform);
   }
 
   let provider: ProviderEntry | undefined;
@@ -1091,7 +1143,7 @@ export function resolveChoice(
     upstreamHost: provider.upstreamHost,
     renderer: provider.renderer,
     baseUrl,
-    command: buildCommand(provider, baseUrl),
+    command: buildCommand(provider, baseUrl, options.platform),
     setup: (provider.setup ?? []).map((file) => ({
       ...file,
       body: file.body.replace(/\{baseUrl\}/g, baseUrl),
