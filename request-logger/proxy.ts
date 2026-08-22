@@ -20,6 +20,7 @@ import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
@@ -177,6 +178,31 @@ function handle(
     if (body.length > 0) upstreamReq.write(body);
     upstreamReq.end();
   });
+}
+
+/**
+ * Some agents probe the upstream with a WebSocket upgrade before falling
+ * back to plain HTTP — Codex on a ChatGPT subscription does this against
+ * /backend-api/codex/responses. This proxy is HTTP-only end to end, and
+ * letting the attempt through does not fail closed, it stalls forever: a
+ * successful upstream upgrade arrives on the outbound request's 'upgrade'
+ * event, not 'response', and nothing here listens for it, so Node just
+ * closes that socket with no response and no error. Nothing ever calls
+ * res.end() on the agent's connection, so the agent is left waiting on a
+ * reply that will never come.
+ *
+ * Answering every upgrade attempt with 426 here, immediately, gives the
+ * agent's own fallback logic something concrete to react to instead of
+ * silence, so it retries over plain HTTP right away rather than hanging or
+ * waiting out its own timeout.
+ */
+export function rejectUpgrade(req: http.IncomingMessage, socket: Duplex): void {
+  console.log(
+    dim(
+      `[request-logger] ${req.method ?? "GET"} ${req.url ?? "/"} tried a WebSocket upgrade -> 426 (forcing HTTP fallback)`
+    )
+  );
+  socket.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
 }
 
 interface Capture {
@@ -386,7 +412,9 @@ async function main(): Promise<void> {
   }
 
   const target = resolution;
-  http.createServer((req, res) => handle(req, res, target)).listen(PORT, () => {
+  const server = http.createServer((req, res) => handle(req, res, target));
+  server.on("upgrade", rejectUpgrade);
+  server.listen(PORT, () => {
     printBanner(target);
   });
 }
