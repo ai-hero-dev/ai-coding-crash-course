@@ -41,10 +41,30 @@ describe("decodeRequestBody", () => {
     expect(decodeRequestBody(compressed, "GZIP")).toBe("hello");
   });
 
-  it("falls back to the raw bytes when the body will not decode", () => {
-    expect(decodeRequestBody(Buffer.from("not compressed"), "zstd")).toBe(
-      "not compressed"
-    );
+  it("fails loudly, instead of silently showing raw bytes as text, when the body will not decode", () => {
+    const out = decodeRequestBody(Buffer.from("not compressed"), "zstd");
+    expect(out).toContain("COULD NOT DECODE");
+    expect(out).toContain("not compressed");
+  });
+
+  it("fails loudly, naming the encoding, for content-encodings it does not know", () => {
+    const out = decodeRequestBody(Buffer.from("hello"), "compress");
+    expect(out).toContain("COULD NOT DECODE");
+    expect(out).toContain("compress");
+  });
+
+  it("fails loudly, naming the Node version, when the runtime has no zstd support", () => {
+    const original = (zlib as any).zstdDecompressSync;
+    delete (zlib as any).zstdDecompressSync;
+    try {
+      const compressed = zlib.zstdCompressSync(Buffer.from("hello"));
+      const out = decodeRequestBody(compressed, "zstd");
+      expect(out).toContain("COULD NOT DECODE");
+      expect(out).toContain("zstd");
+      expect(out).toContain(process.version);
+    } finally {
+      (zlib as any).zstdDecompressSync = original;
+    }
   });
 });
 
