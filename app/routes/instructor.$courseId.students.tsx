@@ -15,7 +15,7 @@ import { db } from "~/db";
 import { modules, lessons } from "~/db/schema";
 import { eq } from "drizzle-orm";
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Student Roster";
   return [
     { title: `Students: ${title} — Cadence` },

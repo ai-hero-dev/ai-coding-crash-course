@@ -28,7 +28,7 @@ const paramsSchema = z.object({
   moduleId: z.coerce.number().int(),
 });
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const moduleTitle = loaderData?.module?.title ?? "Module";
   const courseTitle = loaderData?.course?.title ?? "Course";
   return [{ title: `Preview: ${moduleTitle} — ${courseTitle} — Cadence` }];

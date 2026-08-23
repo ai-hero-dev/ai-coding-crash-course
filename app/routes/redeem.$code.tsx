@@ -25,7 +25,7 @@ const redeemActionSchema = z.object({
   intent: z.literal("confirm-redeem"),
 });
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Redeem Coupon";
   return [
     { title: `Redeem: ${title} — Cadence` },

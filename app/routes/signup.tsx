@@ -27,10 +27,9 @@ export function meta() {
   ];
 }
 
-export async function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request, url }: Route.LoaderArgs) {
   const currentUserId = await getCurrentUserId(request);
   if (currentUserId) {
-    const url = new URL(request.url);
     const redirectTo = url.searchParams.get("redirectTo");
     const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/courses";
     throw redirect(destination);
@@ -38,7 +37,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {};
 }
 
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, url }: Route.ActionArgs) {
   const formData = await request.formData();
   const parsed = parseFormData(formData, signupSchema);
 
@@ -57,7 +56,6 @@ export async function action({ request }: Route.ActionArgs) {
 
   const { name, email } = parsed.data;
 
-  const url = new URL(request.url);
   const redirectTo = url.searchParams.get("redirectTo");
   const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/courses";
 
