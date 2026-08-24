@@ -105,9 +105,9 @@ describe("listAgents", () => {
     expect(claude?.supported).toBe(true);
   });
 
-  it("says Claude Code needs no provider question", () => {
+  it("says Claude Code needs a provider question now it has Vertex AI too", () => {
     const claude = listAgents().find((agent) => agent.id === "claude-code");
-    expect(claude?.needsProvider).toBe(false);
+    expect(claude?.needsProvider).toBe(true);
   });
 
   it("says OpenCode needs a provider question", () => {
@@ -138,11 +138,22 @@ describe("listAgents", () => {
 
 describe("listProviders", () => {
   it("returns nothing for an agent with one provider", () => {
-    expect(listProviders("claude-code")).toEqual([]);
+    expect(listProviders("copilot")).toEqual([]);
   });
 
   it("returns nothing for a refused agent", () => {
     expect(listProviders("cursor")).toEqual([]);
+  });
+
+  it("returns both Claude Code providers", () => {
+    expect(listProviders("claude-code").map((p) => p.id)).toEqual([
+      "anthropic",
+      "vertex",
+    ]);
+  });
+
+  it("leads Claude Code with the Anthropic route, which is the simplest", () => {
+    expect(listProviders("claude-code")[0].id).toBe("anthropic");
   });
 
   it("returns both OpenCode providers", () => {
@@ -167,13 +178,7 @@ describe("listProviders", () => {
 
 describe("agentProviders", () => {
   it("returns the one provider a single-provider agent has, unlike listProviders", () => {
-    expect(listProviders("claude-code")).toEqual([]);
-    expect(agentProviders("claude-code").map((p) => p.id)).toEqual([
-      "anthropic",
-    ]);
-  });
-
-  it("returns the one provider Copilot has too", () => {
+    expect(listProviders("copilot")).toEqual([]);
     expect(agentProviders("copilot").map((p) => p.id)).toEqual(["github"]);
   });
 
@@ -197,7 +202,21 @@ describe("agentProviders", () => {
 
 describe("resolveChoice — upstream hosts", () => {
   it("sends Claude Code to Anthropic", () => {
-    expect(target("claude-code").upstreamHost).toBe("api.anthropic.com");
+    expect(target("claude-code", "anthropic").upstreamHost).toBe(
+      "api.anthropic.com"
+    );
+  });
+
+  it("sends Claude Code on Vertex AI to the global Vertex endpoint", () => {
+    expect(target("claude-code", "vertex").upstreamHost).toBe(
+      "aiplatform.googleapis.com"
+    );
+  });
+
+  it("gives Claude Code's two providers different hosts", () => {
+    expect(target("claude-code", "anthropic").upstreamHost).not.toBe(
+      target("claude-code", "vertex").upstreamHost
+    );
   });
 
   it("sends Codex on an API key to OpenAI", () => {
@@ -259,7 +278,11 @@ describe("resolveChoice — upstream hosts", () => {
 
 describe("resolveChoice — renderers", () => {
   it("reads Claude Code with the Anthropic renderer", () => {
-    expect(target("claude-code").renderer).toBe("anthropic");
+    expect(target("claude-code", "anthropic").renderer).toBe("anthropic");
+  });
+
+  it("reads Claude Code on Vertex AI with the Anthropic renderer too, since Vertex's Claude endpoint is the same Messages API shape", () => {
+    expect(target("claude-code", "vertex").renderer).toBe("anthropic");
   });
 
   it("reads Codex with the OpenAI renderer", () => {
@@ -297,7 +320,15 @@ describe("resolveChoice — base URLs", () => {
   });
 
   it("gives Claude Code no suffix, because it appends the whole path itself", () => {
-    expect(target("claude-code").baseUrl).toBe("http://localhost:8787");
+    expect(target("claude-code", "anthropic").baseUrl).toBe(
+      "http://localhost:8787"
+    );
+  });
+
+  it("gives Claude Code on Vertex AI no suffix either, for the same reason", () => {
+    expect(target("claude-code", "vertex").baseUrl).toBe(
+      "http://localhost:8787"
+    );
   });
 
   it("gives Copilot no suffix", () => {
@@ -321,14 +352,20 @@ describe("resolveChoice — base URLs", () => {
   });
 
   it("uses the port it is given", () => {
-    const result = resolveChoice({ agent: "claude-code" }, { port: 9000, platform: "linux" });
+    const result = resolveChoice(
+      { agent: "claude-code", provider: "anthropic" },
+      { port: 9000, platform: "linux" }
+    );
     expect(result.kind === "target" && result.baseUrl).toBe(
       "http://localhost:9000"
     );
   });
 
   it("puts the chosen port into the command", () => {
-    const result = resolveChoice({ agent: "claude-code" }, { port: 9000, platform: "linux" });
+    const result = resolveChoice(
+      { agent: "claude-code", provider: "anthropic" },
+      { port: 9000, platform: "linux" }
+    );
     expect(result.kind === "target" && result.command).toContain(
       "http://localhost:9000"
     );
@@ -337,18 +374,35 @@ describe("resolveChoice — base URLs", () => {
 
 describe("resolveChoice — commands", () => {
   it("turns tool search back on for Claude Code", () => {
-    expect(target("claude-code").command).toContain("ENABLE_TOOL_SEARCH=true");
+    expect(target("claude-code", "anthropic").command).toContain(
+      "ENABLE_TOOL_SEARCH=true"
+    );
   });
 
   it("uses the plain variable name, not the prefixed one", () => {
-    expect(target("claude-code").command).not.toContain(
+    expect(target("claude-code", "anthropic").command).not.toContain(
       "CLAUDE_CODE_ENABLE_TOOL_SEARCH"
     );
   });
 
   it("sets the base URL for Claude Code", () => {
-    expect(target("claude-code").command).toBe(
+    expect(target("claude-code", "anthropic").command).toBe(
       "ANTHROPIC_BASE_URL=http://localhost:8787 ENABLE_TOOL_SEARCH=true claude"
+    );
+  });
+
+  it("sets the Vertex base URL variable for Claude Code on Vertex AI, not the plain Anthropic one", () => {
+    // ANTHROPIC_BASE_URL is silently ignored once Claude Code is in Vertex
+    // mode (CLAUDE_CODE_USE_VERTEX=1) — this is the whole reason the two
+    // providers need different env vars.
+    expect(target("claude-code", "vertex").command).toBe(
+      "ANTHROPIC_VERTEX_BASE_URL=http://localhost:8787 ENABLE_TOOL_SEARCH=true claude"
+    );
+  });
+
+  it("never puts the plain Anthropic variable in the Vertex command", () => {
+    expect(target("claude-code", "vertex").command).not.toContain(
+      "ANTHROPIC_BASE_URL=http://localhost:8787 "
     );
   });
 
@@ -433,15 +487,22 @@ describe("resolveChoice — commands on win32", () => {
   }
 
   it("uses PowerShell $env: syntax instead of POSIX VAR=value", () => {
-    expect(winTarget("claude-code").command).toBe(
+    expect(winTarget("claude-code", "anthropic").command).toBe(
       "$env:ANTHROPIC_BASE_URL = 'http://localhost:8787'; " +
         "$env:ENABLE_TOOL_SEARCH = 'true'; claude"
     );
   });
 
   it("never prints the POSIX VAR=value form on win32", () => {
-    expect(winTarget("claude-code").command).not.toMatch(
+    expect(winTarget("claude-code", "anthropic").command).not.toMatch(
       /^ANTHROPIC_BASE_URL=/
+    );
+  });
+
+  it("uses PowerShell $env: syntax for Claude Code on Vertex AI too", () => {
+    expect(winTarget("claude-code", "vertex").command).toBe(
+      "$env:ANTHROPIC_VERTEX_BASE_URL = 'http://localhost:8787'; " +
+        "$env:ENABLE_TOOL_SEARCH = 'true'; claude"
     );
   });
 
@@ -486,7 +547,11 @@ describe("resolveChoice — setup files", () => {
   });
 
   it("gives Claude Code no config file to write", () => {
-    expect(target("claude-code").setup).toEqual([]);
+    expect(target("claude-code", "anthropic").setup).toEqual([]);
+  });
+
+  it("gives Claude Code on Vertex AI no config file either — it's all env vars", () => {
+    expect(target("claude-code", "vertex").setup).toEqual([]);
   });
 
   it("gives Pi its models file, because Pi has no variable to set", () => {
@@ -529,8 +594,21 @@ describe("resolveChoice — setup files", () => {
 
 describe("resolveChoice — notes and warnings", () => {
   it("explains the tool search flag to a Claude Code student", () => {
-    expect(target("claude-code").notes.join(" ")).toContain(
+    expect(target("claude-code", "anthropic").notes.join(" ")).toContain(
       "ENABLE_TOOL_SEARCH"
+    );
+  });
+
+  it("tells a Vertex AI student that ANTHROPIC_BASE_URL is ignored in Vertex mode", () => {
+    const notes = target("claude-code", "vertex").notes.join(" ");
+    expect(notes).toContain("ANTHROPIC_VERTEX_BASE_URL");
+    expect(notes).toContain("ANTHROPIC_BASE_URL");
+    expect(notes).toContain("silently ignored");
+  });
+
+  it("tells a Vertex AI student this entry only covers the global region", () => {
+    expect(target("claude-code", "vertex").notes.join(" ")).toContain(
+      "CLOUD_ML_REGION=global"
     );
   });
 
@@ -605,6 +683,26 @@ describe("shouldLogRequest", () => {
   it("drops Anthropic token counting", () => {
     expect(
       shouldLogRequest("POST", "/v1/messages/count_tokens", "anthropic")
+    ).toBe(false);
+  });
+
+  it("logs a real Claude Code on Vertex AI turn", () => {
+    expect(
+      shouldLogRequest(
+        "POST",
+        "/v1/projects/my-proj/locations/global/publishers/anthropic/models/claude-sonnet-4-5:streamRawPredict",
+        "anthropic"
+      )
+    ).toBe(true);
+  });
+
+  it("drops Vertex AI token counting, which uses countTokens instead of count_tokens", () => {
+    expect(
+      shouldLogRequest(
+        "POST",
+        "/v1/projects/my-proj/locations/global/publishers/anthropic/models/claude-sonnet-4-5:countTokens",
+        "anthropic"
+      )
     ).toBe(false);
   });
 
@@ -696,13 +794,21 @@ describe("resolveChoice — bad input", () => {
   });
 
   it("accepts a single-provider agent with no provider given", () => {
-    expect(resolveChoice({ agent: "claude-code" }, PORT).kind).toBe("target");
+    // Claude Code no longer qualifies now it has two providers (see below) —
+    // Copilot is still single-provider and exercises this general case.
+    expect(resolveChoice({ agent: "copilot" }, PORT).kind).toBe("target");
   });
 
   it("ignores a stale provider on a single-provider agent", () => {
-    expect(target("claude-code", "whatever").upstreamHost).toBe(
-      "api.anthropic.com"
+    expect(target("copilot", "whatever").upstreamHost).toBe(
+      "api.githubcopilot.com"
     );
+  });
+
+  it("now requires a provider for Claude Code, since it has two", () => {
+    const result = resolveChoice({ agent: "claude-code" }, PORT);
+    expect(result.kind).toBe("error");
+    expect(result.kind === "error" && result.message).toContain("vertex");
   });
 
   it("points the student at --force when a choice cannot be resolved", () => {
@@ -1162,7 +1268,13 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     expect(result.notes.join(" ")).not.toContain("whole built-in model list");
   });
 
-  it("reuses Claude Code's own template regardless of the wire format chosen, since it has only one", () => {
+  it("reuses Claude Code's Anthropic template regardless of the wire format chosen, since that provider is tagged as the catch-all", () => {
+    // Claude Code now has two providers (anthropic, vertex), so this no
+    // longer falls out of findCustomTemplate's single-provider shortcut —
+    // it works because the "anthropic" provider is tagged
+    // customTemplateFor: ["anthropic", "openai", "raw"]. "vertex" is
+    // untagged on purpose: it needs Google Cloud auth, so it would silently
+    // misconfigure an unrelated custom server.
     const result = customTarget({
       agent: "claude-code",
       provider: CUSTOM_ID,
