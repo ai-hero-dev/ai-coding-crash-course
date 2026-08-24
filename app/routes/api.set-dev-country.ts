@@ -8,7 +8,7 @@ const setDevCountrySchema = z.object({
   country: z.string().length(2).or(z.literal("")).transform((v) => v || null),
 });
 
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, url }: Route.ActionArgs) {
   const formData = await request.formData();
   const parsed = parseFormData(formData, setDevCountrySchema);
 
@@ -16,7 +16,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   const cookie = await setDevCountry(request, country);
 
-  return redirect(new URL(request.url).searchParams.get("redirectTo") ?? "/", {
+  return redirect(url.searchParams.get("redirectTo") ?? "/", {
     headers: { "Set-Cookie": cookie },
   });
 }

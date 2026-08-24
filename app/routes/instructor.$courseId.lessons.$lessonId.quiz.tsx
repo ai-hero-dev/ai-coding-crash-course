@@ -115,7 +115,7 @@ function generateId() {
 
 // ─── Meta ───
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const lessonTitle = loaderData?.lesson?.title ?? "Lesson";
   const hasQuiz = !!loaderData?.existingQuiz;
   return [

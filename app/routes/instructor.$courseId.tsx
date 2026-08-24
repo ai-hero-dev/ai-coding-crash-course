@@ -96,7 +96,7 @@ const courseEditorActionSchema = z.discriminatedUnion("intent", [
   z.object({ intent: z.literal("update-sales-copy"), salesCopy: z.string().optional() }),
 ]);
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Edit Course";
   return [
     { title: `Edit: ${title} — Cadence` },

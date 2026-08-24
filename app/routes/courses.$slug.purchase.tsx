@@ -46,7 +46,7 @@ const purchaseActionSchema = z.discriminatedUnion("intent", [
   }),
 ]);
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Purchase";
   return [
     { title: `Confirm Purchase: ${title} — Cadence` },
@@ -54,7 +54,7 @@ export function meta({ data: loaderData }: Route.MetaArgs) {
   ];
 }
 
-export async function loader({ params, request }: Route.LoaderArgs) {
+export async function loader({ params, request, url }: Route.LoaderArgs) {
   const slug = params.slug;
   const course = getCourseBySlug(slug);
 
@@ -73,7 +73,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     );
   }
 
-  const url = new URL(request.url);
   const mode = url.searchParams.get("mode");
 
   const enrolled = isUserEnrolled(currentUserId, course.id);

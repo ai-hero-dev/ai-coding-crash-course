@@ -32,7 +32,7 @@ const updateLessonSchema = z.object({
   githubRepoUrl: z.string().trim().optional(),
 });
 
-export function meta({ data: loaderData }: Route.MetaArgs) {
+export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.lesson?.title ?? "Edit Lesson";
   return [
     { title: `Edit: ${title} — Cadence` },

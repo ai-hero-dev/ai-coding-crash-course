@@ -8,7 +8,7 @@ const switchUserSchema = z.object({
   userId: z.coerce.number().int().positive("Invalid user ID"),
 });
 
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, url }: Route.ActionArgs) {
   const formData = await request.formData();
   const parsed = parseFormData(formData, switchUserSchema);
 
@@ -18,7 +18,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   const cookie = await setCurrentUserId(request, parsed.data.userId);
 
-  return redirect(new URL(request.url).searchParams.get("redirectTo") ?? "/", {
+  return redirect(url.searchParams.get("redirectTo") ?? "/", {
     headers: { "Set-Cookie": cookie },
   });
 }
