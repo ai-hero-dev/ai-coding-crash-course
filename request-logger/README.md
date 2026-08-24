@@ -226,6 +226,27 @@ Different agents fan out differently, and that is worth watching:
 - **Gemini** on the free Google login makes several extra calls that carry no
   prompt. Those are not logged either.
 
+### If your logs folder fills up in seconds
+
+Some agents retry a failing call immediately and with no backoff. If the
+call keeps failing the same way — a wrong base URL scheme, a bad model ID,
+bad credentials — that turns into a tight loop of real requests, each one a
+genuine POST the tool would otherwise write a full capture for. Left
+unchecked, that is thousands of near-identical files in a few seconds.
+
+Once the same method, path and status code repeats more than 20 times inside
+2 seconds, this tool stops writing a capture for every repeat. It still
+forwards every one of them untouched, so your agent is not affected; it just
+stops filling your disk and your terminal with duplicates. You get one loud
+warning naming the call and the likely causes, then a single summary line
+every 500 repeats for as long as the loop continues.
+
+The fix is always upstream of this tool: stop the agent, fix the base URL,
+model ID or credentials, and start again. `omp` hitting `http://` instead of
+`https://` on a provider's real API is the case this was built for — the
+plaintext request gets rejected in milliseconds with no retry guidance in the
+response, and some agents read that as "retry", not "give up."
+
 ## If your logs folder stays empty
 
 The failure modes here are quiet ones. An empty folder looks the same whichever
