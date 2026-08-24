@@ -25,7 +25,10 @@ function proxyTarget(...args: Parameters<typeof resolveChoice>) {
 
 describe("upstreamConnection", () => {
   it("keeps a catalogue target on https and port 443, unchanged", () => {
-    const target = proxyTarget({ agent: "claude-code" }, PORT);
+    const target = proxyTarget(
+      { agent: "claude-code", provider: "anthropic" },
+      PORT
+    );
     expect(upstreamConnection(target)).toEqual({
       hostname: "api.anthropic.com",
       port: 443,

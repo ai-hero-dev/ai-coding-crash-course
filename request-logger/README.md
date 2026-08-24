@@ -106,7 +106,7 @@ from this table. It is here so you can see what is supported before you start.
 
 | Agent          | Works | What you need                                 |
 | -------------- | ----- | --------------------------------------------- |
-| Claude Code    | Yes   | One command. Works with a subscription login. |
+| Claude Code    | Yes   | One command. Works with a subscription login, an Anthropic API key, or Google Vertex AI. |
 | Codex          | Yes   | One flag. A subscription or an API key works. |
 | GitHub Copilot | Yes   | Your normal subscription login.               |
 | OpenCode       | Yes   | One command, or a config file.                |
@@ -119,6 +119,21 @@ from this table. It is here so you can see what is supported before you start.
 Any other provider — a local model server, or a smaller hosted one — works
 through **Custom base URL**, above, on any agent in this table except Cursor
 and Amp.
+
+### Claude Code on Google Vertex AI
+
+If your Claude Code already talks to Vertex AI (`CLAUDE_CODE_USE_VERTEX=1` is
+set), pick **Google Vertex AI** at the provider question instead of
+**Anthropic**. Vertex mode reads a different variable for a base-URL
+override — `ANTHROPIC_VERTEX_BASE_URL`, not `ANTHROPIC_BASE_URL` — because
+`ANTHROPIC_BASE_URL` belongs to the direct-API code path and is silently
+ignored once Vertex mode is on. Picking **Anthropic** here while
+`CLAUDE_CODE_USE_VERTEX=1` is set is the most common way a Vertex student's
+logs folder stays empty with no error at all.
+
+This route only covers `CLOUD_ML_REGION=global`, the default and most common
+setting. A regional value (`us-east5`, say) talks to a different host and
+is not wired up yet — ask for it via the issue tracker if you hit this.
 
 ### Why Cursor and Amp cannot work
 
@@ -273,11 +288,14 @@ of these happened:
 
 Be fair to the tool when you judge a failure.
 
-- **Claude Code and OMP are tested end to end.** The measurements above are
-  real, and OMP is run daily by the person who built this tool.
+- **Claude Code on the direct Anthropic API, and OMP, are tested end to end.**
+  The measurements above are real, and OMP is run daily by the person who
+  built this tool.
 - **The others were verified** by reading the published code of each agent and
   by driving them against a local listener. They were not each run through a
-  full course of the lesson.
+  full course of the lesson. Claude Code on Google Vertex AI is in this
+  group — verified against Anthropic's own Vertex documentation, not yet
+  driven against a real Vertex project.
 - **A custom base URL is only as tested as the agent it is attached to.** The
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
