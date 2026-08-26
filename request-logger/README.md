@@ -113,6 +113,7 @@ from this table. It is here so you can see what is supported before you start.
 | Pi             | Yes   | A config file. Pi has no base URL variable.   |
 | OMP            | Yes   | A YAML config file. Point it at any backend.  |
 | Gemini CLI     | Yes   | One command. The free Google login works.     |
+| Junie          | Yes   | A config file, and a real API key pasted in — see below. |
 | Cursor CLI     | No    | Nothing can make it work. See below.          |
 | Amp            | No    | Nothing can make it work. See below.          |
 
@@ -134,6 +135,24 @@ logs folder stays empty with no error at all.
 This route only covers `CLOUD_ML_REGION=global`, the default and most common
 setting. A regional value (`us-east5`, say) talks to a different host and
 is not wired up yet — ask for it via the issue tracker if you hit this.
+
+### Junie
+
+Junie is BYOK across several backends, with no fixed host of its own — the
+same shape as OMP — so it goes through the base URL and wire format
+questions like a custom target does, picking a real Anthropic-compatible or
+OpenAI-compatible template depending which you choose. It writes a proxy
+entry to `~/.junie/config.json` (user scope; a project-scope file at
+`<project-root>/.junie/config.json` takes precedence if you have one — see
+Junie's own docs), merged in alongside whatever else is already there.
+
+Junie is the one agent here with no existing login for this tool to pass
+through. Its custom-proxy mechanism bypasses JetBrains AI authentication
+entirely, so the printed config carries a placeholder header line and you
+paste in a real API key yourself — an Anthropic key on the
+Anthropic-compatible route, an OpenAI key on the OpenAI-compatible one.
+Treat that file the way you would any other file holding a real key: do not
+commit it.
 
 ### Why Cursor and Amp cannot work
 
@@ -296,6 +315,13 @@ Be fair to the tool when you judge a failure.
   full course of the lesson. Claude Code on Google Vertex AI is in this
   group — verified against Anthropic's own Vertex documentation, not yet
   driven against a real Vertex project.
+- **Junie is the least-verified entry in the catalogue.** Junie CLI is
+  closed source, so unlike every other agent here its entry was not checked
+  against real source, only against JetBrains' published Junie CLI docs
+  (`config.json`, custom proxies, and CLI reference). It has not been driven
+  against a real Junie install. If the proxy `kind`, the config file's
+  precise shape, or the header format is wrong, that is the likely reason,
+  and the fix is one line in `agents.ts`.
 - **A custom base URL is only as tested as the agent it is attached to.** The
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
