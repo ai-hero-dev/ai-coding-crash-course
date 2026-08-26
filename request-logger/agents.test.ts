@@ -1444,40 +1444,49 @@ describe("resolveChoice — Junie", () => {
     expect(result.kind).toBe("custom-target");
   });
 
-  it("gives Junie its own bin, with no env vars", () => {
+  it("tells Junie which custom model to use, with the endpoint path folded into the base URL", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
     });
-    expect(result.command).toBe("junie");
+    expect(result.command).toBe("junie --model custom:request-logger");
+    expect(result.baseUrl).toBe("http://localhost:8787/v1/messages");
   });
 
-  it("writes an Anthropic-kind proxy entry for the anthropic-compatible route", () => {
+  it("uses the OpenAI chat/completions path for the openai-compatible route", () => {
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+    });
+    expect(result.baseUrl).toBe("http://localhost:8787/v1/chat/completions");
+  });
+
+  it("writes an Anthropic model profile for the anthropic-compatible route", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
     });
     expect(result.setup).toHaveLength(1);
-    expect(result.setup[0].path).toBe("~/.junie/config.json");
+    expect(result.setup[0].path).toBe("~/.junie/models/request-logger.json");
     expect(result.setup[0].language).toBe("json");
-    expect(result.setup[0].body).toContain('"kind": "Anthropic"');
+    expect(result.setup[0].body).toContain('"apiType": "Anthropic"');
     expect(result.setup[0].body).toContain(
-      '"api-url": "http://localhost:8787"'
+      '"baseUrl": "http://localhost:8787/v1/messages"'
     );
-    expect(result.setup[0].body).toContain("x-api-key:");
-    expect(result.setup[0].body).toContain('"provider": "request-logger"');
+    expect(result.setup[0].body).toContain('"x-api-key":');
   });
 
-  it("writes an OpenAI-kind proxy entry for the openai-compatible route", () => {
+  it("writes an OpenAICompletion model profile for the openai-compatible route", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
     });
-    expect(result.setup[0].body).toContain('"kind": "OpenAI"');
-    expect(result.setup[0].body).toContain("Authorization: Bearer");
+    expect(result.setup[0].body).toContain('"apiType": "OpenAICompletion"');
+    expect(result.setup[0].body).toContain('"Authorization": "Bearer');
   });
 
   it("defaults Junie's raw/not-sure custom target to the OpenAI-kind template", () => {
@@ -1489,7 +1498,7 @@ describe("resolveChoice — Junie", () => {
       customBaseUrl: "http://localhost:11434",
       customRenderer: "raw",
     });
-    expect(result.setup[0].body).toContain('"kind": "OpenAI"');
+    expect(result.setup[0].body).toContain('"apiType": "OpenAICompletion"');
   });
 
   it("never sends Junie's Anthropic-kind api-key header on the OpenAI route, or vice versa", () => {
@@ -1503,17 +1512,28 @@ describe("resolveChoice — Junie", () => {
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
     });
-    expect(anthropicRoute.setup[0].body).not.toContain("Authorization: Bearer");
-    expect(openaiRoute.setup[0].body).not.toContain("x-api-key:");
+    expect(anthropicRoute.setup[0].body).not.toContain('"Authorization":');
+    expect(openaiRoute.setup[0].body).not.toContain('"x-api-key":');
   });
 
-  it("warns that Junie's proxy bypasses JetBrains AI authentication, unlike every login-based agent here", () => {
+  it("warns that Junie's model profile bypasses JetBrains AI authentication, unlike every login-based agent here", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
     });
     expect(result.notes.some((note) => note.includes("bypasses"))).toBe(true);
+  });
+
+  it("warns that Junie's documented config.json proxy route does not actually work", () => {
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+    });
+    expect(
+      result.notes.some((note) => note.includes("never consulted"))
+    ).toBe(true);
   });
 
   it("still resolves Junie even when the saved provider field is stale", () => {

@@ -287,37 +287,51 @@ const OMP_NOTE =
   "every OMP setup goes through the base URL and wire format you chose.";
 
 /**
- * Junie's custom-proxy override, in JSON, under ~/.junie/config.json (user
- * scope; see Junie's own configuration-files docs for how a project-scope
- * file layers on top). Unlike ompModels/piModels, this one genuinely differs
- * by wire format: Junie's proxy entry declares a `kind` — the protocol Junie
- * itself will speak on the wire — so a mismatched kind does not 404, it just
- * sends the wrong shape of request. That is why Junie gets two catalogue
- * providers below (tagged by customTemplateFor) instead of OMP's one: the
- * kind, and the auth header format that goes with it, must track the
- * renderer the student actually picked.
+ * Junie's custom-model override, in JSON, under
+ * ~/.junie/models/request-logger.json (see Junie's own Custom LLM models
+ * docs). Junie also documents a *custom-proxy* mechanism — a "proxies" entry
+ * in ~/.junie/config.json with a `kind` of "Anthropic" or "OpenAI" — and an
+ * earlier version of this catalogue entry used that instead. It does not
+ * work: driven against a real Junie CLI install (build 1543.24), that
+ * config.json entry is never consulted, headless or interactive, regardless
+ * of `kind` — Junie silently keeps using its normal authenticated backend
+ * (JetBrains AI, or whatever BYOK key it already had) and nothing reaches
+ * this tool. The custom-model route below is a different mechanism that was
+ * verified to actually work the same way: a JSON profile Junie discovers
+ * from `~/.junie/models/*.json` and that must be selected explicitly with
+ * `--model custom:request-logger` (see the Junie ProviderEntry below).
  *
- * `authHeader` is a placeholder line, not a real credential — see JUNIE_NOTE.
+ * Unlike the proxy route's `api-url`, a model profile's `baseUrl` is the
+ * *full* endpoint path, not an origin — Junie posts to it verbatim with no
+ * path appended. Getting the suffix right (`/v1/messages` for Anthropic,
+ * `/v1/chat/completions` for OpenAI — see each ProviderEntry.suffix below)
+ * is what stands between a working capture and a silent 404. Confirmed by
+ * driving both wire formats against a live proxy.
+ *
+ * `authHeaderValue` is a placeholder line, not a real credential — see
+ * JUNIE_NOTE.
  */
-function junieConfig(
+function junieModelConfig(
   baseUrl: string,
-  kind: "Anthropic" | "OpenAI",
-  authHeader: string
+  apiType: "Anthropic" | "OpenAICompletion",
+  authHeaderName: string,
+  authHeaderValue: string
 ): SetupFile {
   return {
-    path: "~/.junie/config.json",
+    path: "~/.junie/models/request-logger.json",
     language: "json",
     body: [
       "{",
-      '  "proxies": [',
-      "    {",
-      '      "name": "request-logger",',
-      `      "kind": "${kind}",`,
-      `      "api-url": "${baseUrl}",`,
-      `      "headers": ["${authHeader}"]`,
-      "    }",
-      "  ],",
-      '  "provider": "request-logger"',
+      `  "baseUrl": "${baseUrl}",`,
+      '  "id": "request-logger",',
+      `  "apiType": "${apiType}",`,
+      '  "extraHeaders": {',
+      `    "${authHeaderName}": "${authHeaderValue}"` +
+        (apiType === "Anthropic" ? "," : ""),
+      ...(apiType === "Anthropic"
+        ? ['    "anthropic-version": "2023-06-01"']
+        : []),
+      "  }",
       "}",
     ].join("\n"),
   };
@@ -325,15 +339,17 @@ function junieConfig(
 
 const JUNIE_NOTE =
   "Junie has no existing login for this tool to pass through the way Claude " +
-  "Code or Codex do. Its custom proxy bypasses JetBrains AI authentication " +
+  "Code or Codex do. This model profile bypasses JetBrains AI authentication " +
   "entirely, so a real API key for whichever backend you are logging goes " +
-  "straight into config.json's headers array in plaintext. Do not commit " +
-  "this file.";
+  "straight into the file in plaintext. Do not commit it.";
 
-const JUNIE_MERGE_NOTE =
-  "This is merged into ~/.junie/config.json, not a replacement for it — add " +
-  "the proxies entry and the provider key alongside whatever else is " +
-  "already in that file.";
+const JUNIE_PROXY_DOES_NOT_WORK_NOTE =
+  "Junie's docs also describe a \"proxies\" entry in ~/.junie/config.json " +
+  "for this. Do not use it instead of the file below: verified against a " +
+  "real Junie CLI install (build 1543.24), that config is never consulted " +
+  "— Junie keeps using its normal authenticated backend no matter what " +
+  "`kind` is set to, with no error and an empty logs folder. The model " +
+  "profile below is the mechanism that was actually driven end to end.";
 
 const OPENCODE_NOTE =
   "The environment variable above works, but only by accident: OpenCode passes " +
@@ -714,10 +730,13 @@ const AGENTS: AgentEntry[] = [
     // own — the same shape as OMP — so every setup for it is custom too. See
     // AgentEntry.alwaysCustom.
     //
-    // Junie CLI is closed source, so unlike every other entry in this
-    // catalogue this one is verified against JetBrains' published docs only,
-    // not against real source or a real install. Testing status is recorded
-    // in the README's "How much this was tested" section, the same way every
+    // Junie CLI is closed source, so most of this catalogue's other entries
+    // cannot be checked against real source the way, say, Claude Code's can.
+    // This entry is the one exception that was actually driven against a
+    // real Junie CLI install (build 1543.24) rather than only against
+    // JetBrains' published docs — see junieModelConfig's comment above for
+    // what that testing found. Overall testing status is still recorded in
+    // the README's "How much this was tested" section, the same way every
     // other agent's is; it is not printed to the student, the same way no
     // other agent's is either.
     alwaysCustom: true,
@@ -729,16 +748,22 @@ const AGENTS: AgentEntry[] = [
         // path that would read this. See resolveCustomTarget.
         upstreamHost: "",
         renderer: "raw",
+        // A model profile's baseUrl is the full endpoint path, not an
+        // origin — see junieModelConfig's comment.
+        suffix: "/v1/messages",
         bin: "junie",
+        // Junie only looks at a custom model when it is asked for by name.
+        args: ["--model", "custom:request-logger"],
         customTemplateFor: ["anthropic"],
         setup: [
-          junieConfig(
+          junieModelConfig(
             "{baseUrl}",
             "Anthropic",
-            "x-api-key: YOUR_ANTHROPIC_API_KEY"
+            "x-api-key",
+            "YOUR_ANTHROPIC_API_KEY"
           ),
         ],
-        notes: [JUNIE_NOTE, JUNIE_MERGE_NOTE],
+        notes: [JUNIE_NOTE, JUNIE_PROXY_DOES_NOT_WORK_NOTE],
       },
       {
         id: "openai",
@@ -748,19 +773,22 @@ const AGENTS: AgentEntry[] = [
         // this. See resolveCustomTarget.
         upstreamHost: "",
         renderer: "raw",
+        suffix: "/v1/chat/completions",
         bin: "junie",
+        args: ["--model", "custom:request-logger"],
         // Also the catch-all for "raw"/not sure — see the OpenCode and Pi
         // entries above for why an OpenAI-compatible guess is the better
         // default for an unidentified custom server.
         customTemplateFor: ["openai", "raw"],
         setup: [
-          junieConfig(
+          junieModelConfig(
             "{baseUrl}",
-            "OpenAI",
-            "Authorization: Bearer YOUR_OPENAI_API_KEY"
+            "OpenAICompletion",
+            "Authorization",
+            "Bearer YOUR_OPENAI_API_KEY"
           ),
         ],
-        notes: [JUNIE_NOTE, JUNIE_MERGE_NOTE],
+        notes: [JUNIE_NOTE, JUNIE_PROXY_DOES_NOT_WORK_NOTE],
       },
     ],
   },

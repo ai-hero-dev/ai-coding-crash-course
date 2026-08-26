@@ -141,14 +141,23 @@ is not wired up yet — ask for it via the issue tracker if you hit this.
 Junie is BYOK across several backends, with no fixed host of its own — the
 same shape as OMP — so it goes through the base URL and wire format
 questions like a custom target does, picking a real Anthropic-compatible or
-OpenAI-compatible template depending which you choose. It writes a proxy
-entry to `~/.junie/config.json` (user scope; a project-scope file at
-`<project-root>/.junie/config.json` takes precedence if you have one — see
-Junie's own docs), merged in alongside whatever else is already there.
+OpenAI-compatible template depending which you choose. It writes a **custom
+model profile** to `~/.junie/models/request-logger.json`, and the command it
+prints selects that profile explicitly with `--model custom:request-logger`
+— Junie only uses a custom model when asked for by name.
+
+Junie's own docs also describe a different mechanism for this: a `proxies`
+entry in `~/.junie/config.json` with a `kind` of `"Anthropic"` or `"OpenAI"`.
+Do not use that instead. It was tried first, and driven against a real Junie
+CLI install (build 1543.24) it does not work — Junie never consults it,
+headless or interactive, no matter what `kind` is set to, and just keeps
+talking to its normal authenticated backend with no error and an empty logs
+folder. The custom-model route above is the one that was actually driven
+end to end, with a real proxy in front of it, on both wire formats.
 
 Junie is the one agent here with no existing login for this tool to pass
-through. Its custom-proxy mechanism bypasses JetBrains AI authentication
-entirely, so the printed config carries a placeholder header line and you
+through. Its custom-model mechanism bypasses JetBrains AI authentication
+entirely, so the printed profile carries a placeholder header line and you
 paste in a real API key yourself — an Anthropic key on the
 Anthropic-compatible route, an OpenAI key on the OpenAI-compatible one.
 Treat that file the way you would any other file holding a real key: do not
@@ -315,13 +324,19 @@ Be fair to the tool when you judge a failure.
   full course of the lesson. Claude Code on Google Vertex AI is in this
   group — verified against Anthropic's own Vertex documentation, not yet
   driven against a real Vertex project.
-- **Junie is the least-verified entry in the catalogue.** Junie CLI is
-  closed source, so unlike every other agent here its entry was not checked
-  against real source, only against JetBrains' published Junie CLI docs
-  (`config.json`, custom proxies, and CLI reference). It has not been driven
-  against a real Junie install. If the proxy `kind`, the config file's
-  precise shape, or the header format is wrong, that is the likely reason,
-  and the fix is one line in `agents.ts`.
+- **Junie was driven against a real install (build 1543.24)**, unlike every
+  other closed-source claim in this list. That test is exactly why this
+  entry no longer follows Junie's own documented `proxies`/`config.json`
+  mechanism: on that real install, it never took effect, regardless of
+  `kind`, with no error to say so. The custom-model route it uses instead
+  (`~/.junie/models/*.json` selected via `--model custom:<name>`) was
+  confirmed to actually deliver requests to a local listener, on both wire
+  formats, with the correct endpoint path in each case. What is not verified
+  is everything upstream of that: Junie's task-completion behavior, its
+  interactive TUI, and whether a different install or a future release
+  changes any of this. If something here breaks, that is the likely reason,
+  and the fix is likely still one line in `agents.ts` — just possibly a
+  different line than the `kind` field this note used to point at.
 - **A custom base URL is only as tested as the agent it is attached to.** The
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
