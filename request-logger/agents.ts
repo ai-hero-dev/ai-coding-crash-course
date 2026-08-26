@@ -321,9 +321,19 @@ const OMP_NOTE =
  *
  * `authHeaderValue` is a placeholder line, not a real credential — see
  * JUNIE_NOTE.
+ *
+ * `id` is not a label for this tool — Junie sends it verbatim as the
+ * `model` field of every request it makes on this profile. An earlier
+ * version hard-coded it to `"request-logger"`, which is not a model any
+ * real backend recognizes: Anthropic rejected it with a 404 ("model:
+ * request-logger"), confirmed against a live proxy. It must be a real
+ * model ID for whichever backend `baseUrl` points at, which is why
+ * customTargetNeedsModel (below) asks the student for one instead of this
+ * function inventing a name.
  */
 function junieModelConfig(
   baseUrl: string,
+  model: string,
   apiType: "Anthropic" | "OpenAICompletion",
   authHeaderName: string,
   authHeaderValue: string
@@ -334,7 +344,7 @@ function junieModelConfig(
     body: [
       "{",
       `  "baseUrl": "${baseUrl}",`,
-      '  "id": "request-logger",',
+      `  "id": "${model}",`,
       `  "apiType": "${apiType}",`,
       '  "extraHeaders": {',
       `    "${authHeaderName}": "${authHeaderValue}"`,
@@ -765,6 +775,7 @@ const AGENTS: AgentEntry[] = [
         setup: [
           junieModelConfig(
             "{baseUrl}",
+            "{model}",
             "Anthropic",
             "x-api-key",
             "YOUR_ANTHROPIC_API_KEY"
@@ -790,6 +801,7 @@ const AGENTS: AgentEntry[] = [
         setup: [
           junieModelConfig(
             "{baseUrl}",
+            "{model}",
             "OpenAICompletion",
             "Authorization",
             "Bearer YOUR_OPENAI_API_KEY"
@@ -1059,12 +1071,17 @@ const RAW_WIRE_FORMAT_NOTE =
  *   an existing built-in provider (openai or anthropic), and that
  *   provider's built-in model names almost never exist on a self-hosted
  *   backend, whichever wire format was chosen for rendering.
+ * - Junie needs one on every route: a model profile's `id` is not a label,
+ *   Junie sends it verbatim as every request's `model` field (see
+ *   junieModelConfig), so an invented placeholder there is rejected by the
+ *   real backend with a 404 — confirmed against a live proxy.
  */
 export function customTargetNeedsModel(
   agentId: string,
   renderer: RendererId
 ): boolean {
   if (agentId === "pi") return true;
+  if (agentId === "junie") return true;
   if (agentId === "opencode") return renderer === "openai";
   return false;
 }
@@ -1237,6 +1254,17 @@ function resolveCustomTarget(
   ];
   if (renderer === "raw") notes.push(RAW_WIRE_FORMAT_NOTE);
 
+  // Junie is the only agent that reaches this generic branch and also needs
+  // a model declared up front — its setup file's {model} placeholder is
+  // filled in below the same way {baseUrl} always has been. See
+  // customTargetNeedsModel and junieModelConfig for why.
+  let model: string | undefined;
+  if (customTargetNeedsModel(agent.id, renderer)) {
+    const modelResult = resolveCustomModel(choice, `${agent.label}'s custom target`);
+    if (modelResult.kind === "error") return modelResult;
+    model = modelResult.model;
+  }
+
   return {
     kind: "custom-target",
     agent: agent.id,
@@ -1248,7 +1276,9 @@ function resolveCustomTarget(
     command: template ? buildCommand(template, baseUrl, platform) : agent.id,
     setup: (template?.setup ?? []).map((file) => ({
       ...file,
-      body: file.body.replace(/\{baseUrl\}/g, baseUrl),
+      body: file.body
+        .replace(/\{baseUrl\}/g, baseUrl)
+        .replace(/\{model\}/g, model ?? ""),
     })),
     notes,
     warnings: template?.warnings ?? [],

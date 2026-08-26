@@ -178,9 +178,10 @@ async function askModelIdManually(): Promise<string> {
 /**
  * Discover the model IDs a custom base URL serves, and ask which one to use
  * when there is a real choice — shared by every custom target that needs a
- * model declared up front: OpenCode's custom OpenAI-compatible route, and
- * every one of Pi's custom routes. Same shape both times: discover, offer a
- * choice when there is more than one candidate, fall back to manual entry.
+ * model declared up front: OpenCode's custom OpenAI-compatible route, every
+ * one of Pi's custom routes, and every one of Junie's. Same shape every
+ * time: discover, offer a choice when there is more than one candidate,
+ * fall back to manual entry.
  */
 async function askDiscoveredModel(baseUrl: string): Promise<string> {
   const modelIds = await discoverModelIds(baseUrl);
@@ -255,13 +256,18 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
   if (agent?.alwaysCustom) {
     // Every setup for this agent is a custom target — there is no fixed
     // provider to fall back to, so the provider question is skipped and the
-    // two custom questions are asked directly instead.
+    // custom questions are asked directly instead: base URL and wire format
+    // always, plus a model when customTargetNeedsModel says this agent
+    // needs one declared up front (Junie does, on every route).
     const custom = await askCustomTarget();
     choice = {
       agent: agentId,
       provider: CUSTOM_ID,
       customBaseUrl: custom.baseUrl,
       customRenderer: custom.renderer,
+      customModel: customTargetNeedsModel(agentId, custom.renderer)
+        ? await askDiscoveredModel(custom.baseUrl)
+        : undefined,
     };
   } else {
     // Every supported agent asks a provider question now, even one with a

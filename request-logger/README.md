@@ -42,11 +42,12 @@ If you are not sure, pick "not sure". The tool still logs everything; it just
 shows you the raw JSON instead of a fully readable render, because it cannot
 safely guess a shape you did not tell it. See "What you get" below.
 
-For **OpenCode** with an **OpenAI-compatible** custom target, and for **every**
-**Pi** custom target, the wizard also tries the unauthenticated `/v1/models`
-endpoint and offers any model IDs it finds. You can always enter an ID
-manually, and the wizard falls back to manual entry if discovery fails.
-Endpoints that require credentials for model listing are not supported.
+For **OpenCode** with an **OpenAI-compatible** custom target, for **every**
+**Pi** custom target, and for **every Junie** target, the wizard also tries
+the unauthenticated `/v1/models` endpoint and offers any model IDs it finds.
+You can always enter an ID manually, and the wizard falls back to manual
+entry if discovery fails. Endpoints that require credentials for model
+listing are not supported.
 
 - OpenCode's printed command uses a temporary `OPENCODE_CONFIG_CONTENT`
   provider for that one run, merged with your existing OpenCode configuration
@@ -62,6 +63,10 @@ Endpoints that require credentials for model listing are not supported.
   endpoint, which an Anthropic-compatible server often does not expose. If
   discovery finds nothing there, that is expected, and typing the model ID by
   hand is the normal path, not a sign something is broken.
+- Junie asks for a model on every wire format too, for a different reason
+  than Pi: Junie sends the model profile's `id` verbatim as the `model` field
+  of every request, so it has to be a real model your backend recognizes, not
+  a placeholder — see the Junie section below.
 
 To change a remembered answer:
 
@@ -139,12 +144,20 @@ is not wired up yet — ask for it via the issue tracker if you hit this.
 ### Junie
 
 Junie is BYOK across several backends, with no fixed host of its own — the
-same shape as OMP — so it goes through the base URL and wire format
+same shape as OMP — so it goes through the base URL, wire format and model
 questions like a custom target does, picking a real Anthropic-compatible or
 OpenAI-compatible template depending which you choose. It writes a **custom
 model profile** to `~/.junie/models/request-logger.json`, and the command it
 prints selects that profile explicitly with `--model custom:request-logger`
 — Junie only uses a custom model when asked for by name.
+
+The model you pick goes into the profile's `id` field, which Junie sends
+verbatim as the `model` field of every request — it is not a label for this
+tool to key off of. An earlier version of this profile hard-coded `id` to
+`"request-logger"`, which is not a real model on any backend: Anthropic
+rejected every request with a 404 (`model: request-logger`), confirmed
+against a live proxy. Pick a model your backend actually serves (e.g.
+`claude-sonnet-4-5` against the real Anthropic API).
 
 Junie's own docs also describe a different mechanism for this: a `proxies`
 entry in `~/.junie/config.json` with a `kind` of `"Anthropic"` or `"OpenAI"`.
