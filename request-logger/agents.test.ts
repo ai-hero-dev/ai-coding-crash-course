@@ -1479,6 +1479,21 @@ describe("resolveChoice — Junie", () => {
     expect(result.setup[0].body).toContain('"x-api-key":');
   });
 
+  it("does not set anthropic-version itself, since Junie already sends one", () => {
+    // Junie's Anthropic client always sends its own anthropic-version
+    // header. An extraHeaders entry with the same name does not replace
+    // that, it is appended as a second occurrence, and the two get joined
+    // with a comma on the wire (e.g. "2023-06-01,2023-06-01") -- which
+    // Anthropic rejects as an invalid version code. Confirmed against a
+    // live proxy: this is what was producing a 400 on every request.
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+    });
+    expect(result.setup[0].body).not.toContain("anthropic-version");
+  });
+
   it("writes an OpenAICompletion model profile for the openai-compatible route", () => {
     const result = customTarget({
       agent: "junie",

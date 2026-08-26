@@ -308,6 +308,17 @@ const OMP_NOTE =
  * is what stands between a working capture and a silent 404. Confirmed by
  * driving both wire formats against a live proxy.
  *
+ * `extraHeaders` holds only the auth header. An earlier version also added
+ * `anthropic-version` here, on the assumption that Junie's Anthropic client
+ * would not set it itself. It does — Junie always sends its own
+ * `anthropic-version: 2023-06-01`, and an `extraHeaders` entry does not
+ * replace that, it is appended as a second occurrence of the same header
+ * name. The two get joined with a comma on the wire
+ * (`anthropic-version: 2023-06-01,2023-06-01`), and Anthropic rejects that
+ * as an invalid version code — a 400 from a request that looks, at a
+ * glance, correctly authenticated. Confirmed against a live proxy: removing
+ * the header here is what fixed it, so nothing here should re-add it.
+ *
  * `authHeaderValue` is a placeholder line, not a real credential — see
  * JUNIE_NOTE.
  */
@@ -326,11 +337,7 @@ function junieModelConfig(
       '  "id": "request-logger",',
       `  "apiType": "${apiType}",`,
       '  "extraHeaders": {',
-      `    "${authHeaderName}": "${authHeaderValue}"` +
-        (apiType === "Anthropic" ? "," : ""),
-      ...(apiType === "Anthropic"
-        ? ['    "anthropic-version": "2023-06-01"']
-        : []),
+      `    "${authHeaderName}": "${authHeaderValue}"`,
       "  }",
       "}",
     ].join("\n"),
