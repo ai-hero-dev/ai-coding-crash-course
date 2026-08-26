@@ -1432,52 +1432,108 @@ describe("resolveChoice — OMP", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveChoice — Junie", () => {
-  it("resolves Junie straight from a base URL and wire format, with no provider needed", () => {
+  it("resolves Junie straight from a base URL, wire format and model, with no provider needed", () => {
     const result = resolveChoice(
       {
         agent: "junie",
         customBaseUrl: "http://localhost:8787",
         customRenderer: "anthropic",
+        customModel: "claude-sonnet-4-5",
       },
       PORT
     );
     expect(result.kind).toBe("custom-target");
   });
 
-  it("gives Junie its own bin, with no env vars", () => {
+  it("tells Junie which custom model to use, with the endpoint path folded into the base URL", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
     });
-    expect(result.command).toBe("junie");
+    expect(result.command).toBe("junie --model custom:request-logger");
+    expect(result.baseUrl).toBe("http://localhost:8787/v1/messages");
   });
 
-  it("writes an Anthropic-kind proxy entry for the anthropic-compatible route", () => {
-    const result = customTarget({
-      agent: "junie",
-      customBaseUrl: "http://localhost:11434",
-      customRenderer: "anthropic",
-    });
-    expect(result.setup).toHaveLength(1);
-    expect(result.setup[0].path).toBe("~/.junie/config.json");
-    expect(result.setup[0].language).toBe("json");
-    expect(result.setup[0].body).toContain('"kind": "Anthropic"');
-    expect(result.setup[0].body).toContain(
-      '"api-url": "http://localhost:8787"'
-    );
-    expect(result.setup[0].body).toContain("x-api-key:");
-    expect(result.setup[0].body).toContain('"provider": "request-logger"');
-  });
-
-  it("writes an OpenAI-kind proxy entry for the openai-compatible route", () => {
+  it("uses the OpenAI chat/completions path for the openai-compatible route", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "gpt-4.1",
     });
-    expect(result.setup[0].body).toContain('"kind": "OpenAI"');
-    expect(result.setup[0].body).toContain("Authorization: Bearer");
+    expect(result.baseUrl).toBe("http://localhost:8787/v1/chat/completions");
+  });
+
+  it("writes an Anthropic model profile for the anthropic-compatible route", () => {
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
+    });
+    expect(result.setup).toHaveLength(1);
+    expect(result.setup[0].path).toBe("~/.junie/models/request-logger.json");
+    expect(result.setup[0].language).toBe("json");
+    expect(result.setup[0].body).toContain('"apiType": "Anthropic"');
+    expect(result.setup[0].body).toContain(
+      '"baseUrl": "http://localhost:8787/v1/messages"'
+    );
+    expect(result.setup[0].body).toContain('"x-api-key":');
+  });
+
+  it("writes the chosen model into the profile's id field, since Junie sends it verbatim as the model on every request", () => {
+    // An earlier version hard-coded "id" to "request-logger", which is not a
+    // real model on any backend -- Anthropic rejected it with a 404 ("model:
+    // request-logger"), confirmed against a live proxy.
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
+    });
+    expect(result.setup[0].body).toContain('"id": "claude-sonnet-4-5"');
+    expect(result.setup[0].body).not.toContain("request-logger");
+  });
+
+  it("rejects a Junie custom target with no model chosen", () => {
+    const result = resolveChoice(
+      {
+        agent: "junie",
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: "anthropic",
+      },
+      PORT
+    );
+    expect(result.kind).toBe("error");
+  });
+
+  it("does not set anthropic-version itself, since Junie already sends one", () => {
+    // Junie's Anthropic client always sends its own anthropic-version
+    // header. An extraHeaders entry with the same name does not replace
+    // that, it is appended as a second occurrence, and the two get joined
+    // with a comma on the wire (e.g. "2023-06-01,2023-06-01") -- which
+    // Anthropic rejects as an invalid version code. Confirmed against a
+    // live proxy: this is what was producing a 400 on every request.
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
+    });
+    expect(result.setup[0].body).not.toContain("anthropic-version");
+  });
+
+  it("writes an OpenAICompletion model profile for the openai-compatible route", () => {
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "gpt-4.1",
+    });
+    expect(result.setup[0].body).toContain('"apiType": "OpenAICompletion"');
+    expect(result.setup[0].body).toContain('"Authorization": "Bearer');
   });
 
   it("defaults Junie's raw/not-sure custom target to the OpenAI-kind template", () => {
@@ -1488,8 +1544,9 @@ describe("resolveChoice — Junie", () => {
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "raw",
+      customModel: "some-model",
     });
-    expect(result.setup[0].body).toContain('"kind": "OpenAI"');
+    expect(result.setup[0].body).toContain('"apiType": "OpenAICompletion"');
   });
 
   it("never sends Junie's Anthropic-kind api-key header on the OpenAI route, or vice versa", () => {
@@ -1497,34 +1554,50 @@ describe("resolveChoice — Junie", () => {
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
     });
     const openaiRoute = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "openai",
+      customModel: "gpt-4.1",
     });
-    expect(anthropicRoute.setup[0].body).not.toContain("Authorization: Bearer");
-    expect(openaiRoute.setup[0].body).not.toContain("x-api-key:");
+    expect(anthropicRoute.setup[0].body).not.toContain('"Authorization":');
+    expect(openaiRoute.setup[0].body).not.toContain('"x-api-key":');
   });
 
-  it("warns that Junie's proxy bypasses JetBrains AI authentication, unlike every login-based agent here", () => {
+  it("warns that Junie's model profile bypasses JetBrains AI authentication, unlike every login-based agent here", () => {
     const result = customTarget({
       agent: "junie",
       customBaseUrl: "http://localhost:11434",
       customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
     });
     expect(result.notes.some((note) => note.includes("bypasses"))).toBe(true);
   });
 
+  it("warns that Junie's documented config.json proxy route does not actually work", () => {
+    const result = customTarget({
+      agent: "junie",
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+      customModel: "claude-sonnet-4-5",
+    });
+    expect(
+      result.notes.some((note) => note.includes("never consulted"))
+    ).toBe(true);
+  });
+
   it("still resolves Junie even when the saved provider field is stale", () => {
     // alwaysCustom agents ignore whatever is saved under `provider`; only
-    // the custom base URL and renderer matter.
+    // the custom base URL, renderer and model matter.
     const result = resolveChoice(
       {
         agent: "junie",
         provider: "whatever-was-saved-before",
         customBaseUrl: "http://localhost:11434",
         customRenderer: "raw",
+        customModel: "some-model",
       },
       PORT
     );

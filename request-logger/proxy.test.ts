@@ -6,6 +6,7 @@ import {
   BURST_THRESHOLD,
   BURST_WINDOW_MS,
   burstKey,
+  describeError,
   rejectUpgrade,
   trackBurst,
   upstreamConnection,
@@ -125,6 +126,42 @@ describe("upstreamConnection", () => {
       port: 8443,
       useHttps: true,
     });
+  });
+});
+
+describe("describeError", () => {
+  it("uses the message on a plain Error", () => {
+    expect(describeError(new Error("connect ECONNREFUSED 127.0.0.1:8787"))).toBe(
+      "connect ECONNREFUSED 127.0.0.1:8787"
+    );
+  });
+
+  it("falls back to the error code when the message is blank", () => {
+    const err = new Error("");
+    (err as NodeJS.ErrnoException).code = "ECONNREFUSED";
+    expect(describeError(err)).toBe("ECONNREFUSED");
+  });
+
+  it("unpacks an AggregateError instead of printing its always-blank message", () => {
+    // Node throws exactly this shape connecting to a dual-stack host (e.g.
+    // "localhost") with nothing listening: the outer AggregateError.message
+    // is "", and the real reasons are one level down in .errors. This is
+    // the bug that made every failed upstream connection print
+    // "[request-logger] upstream error:" with nothing after the colon.
+    const err = new AggregateError(
+      [
+        new Error("connect ECONNREFUSED 127.0.0.1:59999"),
+        new Error("connect ECONNREFUSED ::1:59999"),
+      ],
+      ""
+    );
+    expect(describeError(err)).toBe(
+      "connect ECONNREFUSED 127.0.0.1:59999; connect ECONNREFUSED ::1:59999"
+    );
+  });
+
+  it("falls back to String() for a non-Error throw", () => {
+    expect(describeError("socket hang up")).toBe("socket hang up");
   });
 });
 

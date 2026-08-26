@@ -86,6 +86,30 @@ export function upstreamConnection(target: ProxyTarget): {
 }
 
 /**
+ * A readable description of a failed upstream connection.
+ *
+ * Node's http/https client resolves `localhost` (and any other dual-stack
+ * host) by trying IPv4 and IPv6 in parallel. When both attempts fail — most
+ * commonly because nothing is listening at the configured upstream at all —
+ * Node throws an AggregateError whose own `.message` is always the empty
+ * string; the real reasons live one level down, in `.errors`. Printing
+ * `err.message` directly on that error prints nothing, which is exactly what
+ * was happening here: a student watching a wall of blank
+ * "[request-logger] upstream error:" lines with no way to tell what's wrong.
+ * This reaches into `.errors` (and falls back to `.code`, then `.message`)
+ * so the printed line always says why the connection actually failed.
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof AggregateError && err.errors.length > 0) {
+    return err.errors.map((e) => describeError(e)).join("; ");
+  }
+  if (err instanceof Error) {
+    return err.message || (err as NodeJS.ErrnoException).code || err.name;
+  }
+  return String(err);
+}
+
+/**
  * Headers forwarded upstream. We strip hop-by-hop headers, and we ask for an
  * uncompressed response so the capture is readable, then recompute the length
  * against the buffered body.
@@ -166,12 +190,31 @@ function handle(
       : http.request(requestOptions, onUpstreamResponse);
 
     upstreamReq.on("error", (err) => {
-      console.error(`[request-logger] upstream error: ${err.message}`);
+      const description = describeError(err);
+      // A dead upstream fails every retry identically and fast, the same
+      // shape of storm BURST_THRESHOLD exists for below — so this shares
+      // that guard rather than flooding the console on its own. There is no
+      // real status code here (the connection never got that far), so 0
+      // stands in for one: burstKey only uses it to tell captures apart.
+      const burst = trackBurst(
+        burstState,
+        burstKey(req.method ?? "POST", reqPath, 0),
+        Date.now()
+      );
+      burstState = burst.state;
+      if (!burst.suppressed) {
+        console.error(`[request-logger] upstream error: ${description}`);
+      } else if (burst.justDetected) {
+        console.error(
+          `[request-logger] upstream error: ${description}  ` +
+            `(repeating fast — further failures of this exact call are now suppressed)`
+        );
+      }
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "application/json" });
       }
       res.end(
-        JSON.stringify({ error: `request-logger upstream error: ${err.message}` })
+        JSON.stringify({ error: `request-logger upstream error: ${description}` })
       );
     });
 
