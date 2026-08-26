@@ -335,11 +335,6 @@ const JUNIE_MERGE_NOTE =
   "the proxies entry and the provider key alongside whatever else is " +
   "already in that file.";
 
-// Junie's testing status (verified against JetBrains' published docs, not
-// yet driven against a real install) is recorded in the README's "How much
-// this was tested" section, the same way every other agent's is — it is not
-// printed to the student, the same way no other agent's is either.
-
 const OPENCODE_NOTE =
   "The environment variable above works, but only by accident: OpenCode passes " +
   "no base URL of its own for this provider, so the bundled SDK falls back to " +
@@ -718,6 +713,13 @@ const AGENTS: AgentEntry[] = [
     // OpenRouter, Copilot, a LiteLLM proxy) with no single fixed host of its
     // own — the same shape as OMP — so every setup for it is custom too. See
     // AgentEntry.alwaysCustom.
+    //
+    // Junie CLI is closed source, so unlike every other entry in this
+    // catalogue this one is verified against JetBrains' published docs only,
+    // not against real source or a real install. Testing status is recorded
+    // in the README's "How much this was tested" section, the same way every
+    // other agent's is; it is not printed to the student, the same way no
+    // other agent's is either.
     alwaysCustom: true,
     providers: [
       {
@@ -741,6 +743,9 @@ const AGENTS: AgentEntry[] = [
       {
         id: "openai",
         label: "OpenAI-compatible",
+        // Unused, same as the Anthropic-compatible entry above: Junie never
+        // reaches the normal (non-custom) resolution path that would read
+        // this. See resolveCustomTarget.
         upstreamHost: "",
         renderer: "raw",
         bin: "junie",
