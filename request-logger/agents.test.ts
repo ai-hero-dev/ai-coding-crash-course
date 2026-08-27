@@ -79,6 +79,7 @@ describe("listAgents", () => {
       "claude-code",
       "codex",
       "copilot",
+      "grok",
       "opencode",
       "pi",
       "omp",
@@ -114,6 +115,17 @@ describe("listAgents", () => {
   it("says OpenCode needs a provider question", () => {
     const opencode = listAgents().find((agent) => agent.id === "opencode");
     expect(opencode?.needsProvider).toBe(true);
+  });
+
+  it("marks Grok as supported", () => {
+    const grok = listAgents().find((agent) => agent.id === "grok");
+    expect(grok?.supported).toBe(true);
+  });
+
+  it("says Grok needs no provider question, because it has only one", () => {
+    const grok = listAgents().find((agent) => agent.id === "grok");
+    expect(grok?.needsProvider).toBe(false);
+    expect(grok?.alwaysCustom).toBe(false);
   });
 
   it("marks OMP as supported", () => {
@@ -200,6 +212,11 @@ describe("agentProviders", () => {
     expect(agentProviders("copilot").map((p) => p.id)).toEqual(["github"]);
   });
 
+  it("returns Grok's one xAI provider, unlike listProviders", () => {
+    expect(listProviders("grok")).toEqual([]);
+    expect(agentProviders("grok").map((p) => p.id)).toEqual(["xai"]);
+  });
+
   it("returns nothing for a refused agent", () => {
     expect(agentProviders("cursor")).toEqual([]);
   });
@@ -256,6 +273,10 @@ describe("resolveChoice — upstream hosts", () => {
 
   it("sends Copilot to its own host", () => {
     expect(target("copilot").upstreamHost).toBe("api.githubcopilot.com");
+  });
+
+  it("sends Grok to the CLI chat proxy host", () => {
+    expect(target("grok").upstreamHost).toBe("cli-chat-proxy.grok.com");
   });
 
   it("sends OpenCode on Anthropic to Anthropic", () => {
@@ -321,6 +342,10 @@ describe("resolveChoice — renderers", () => {
     expect(target("copilot").renderer).toBe("openai");
   });
 
+  it("reads Grok with the OpenAI renderer, since its default is the Responses API", () => {
+    expect(target("grok").renderer).toBe("openai");
+  });
+
   it("reads OpenCode on Anthropic with the Anthropic renderer", () => {
     expect(target("opencode", "anthropic").renderer).toBe("anthropic");
   });
@@ -360,6 +385,10 @@ describe("resolveChoice — base URLs", () => {
 
   it("gives Copilot no suffix", () => {
     expect(target("copilot").baseUrl).toBe("http://localhost:8787");
+  });
+
+  it("gives Grok the /v1 suffix, because it appends /responses to the default", () => {
+    expect(target("grok").baseUrl).toBe("http://localhost:8787/v1");
   });
 
   it("gives Pi on Anthropic no suffix, because Pi's SDK adds /v1/messages", () => {
@@ -463,6 +492,19 @@ describe("resolveChoice — commands", () => {
     );
   });
 
+  it("uses Grok's CLI chat-proxy variable, not the custom-models one", () => {
+    expect(target("grok").command).toBe(
+      "GROK_CLI_CHAT_PROXY_BASE_URL=http://localhost:8787/v1 grok"
+    );
+  });
+
+  it("never puts GROK_MODELS_BASE_URL in the Grok command", () => {
+    // GROK_MODELS_BASE_URL switches the CLI onto API-key auth against a
+    // custom /v1/models endpoint. Setting it here would drop the grok.com
+    // login and talk to the wrong host.
+    expect(target("grok").command).not.toContain("GROK_MODELS_BASE_URL");
+  });
+
   it("carries the suffix through into the OpenCode command", () => {
     expect(target("opencode", "anthropic").command).toBe(
       "ANTHROPIC_BASE_URL=http://localhost:8787/v1 opencode"
@@ -539,6 +581,12 @@ describe("resolveChoice — commands on win32", () => {
     );
   });
 
+  it("uses PowerShell $env: syntax for Grok too", () => {
+    expect(winTarget("grok").command).toBe(
+      "$env:GROK_CLI_CHAT_PROXY_BASE_URL = 'http://localhost:8787/v1'; grok"
+    );
+  });
+
   it("leaves a command with no env vars unchanged, since there is nothing to rewrite", () => {
     // Pi has no base URL variable at all.
     expect(winTarget("pi", "anthropic").command).toBe("pi");
@@ -575,6 +623,10 @@ describe("resolveChoice — setup files", () => {
 
   it("gives Claude Code no config file to write", () => {
     expect(target("claude-code", "anthropic").setup).toEqual([]);
+  });
+
+  it("gives Grok no config file to write — it's all env vars", () => {
+    expect(target("grok").setup).toEqual([]);
   });
 
   it("gives Claude Code on Vertex AI no config file either — it's all env vars", () => {
@@ -649,6 +701,14 @@ describe("resolveChoice — notes and warnings", () => {
 
   it("warns a Copilot student that some models write no log", () => {
     expect(target("copilot").warnings.join(" ")).toContain("WebSocket");
+  });
+
+  it("tells a Grok student that a grok.com login still works", () => {
+    expect(target("grok").notes.join(" ")).toContain("grok.com login");
+  });
+
+  it("warns a Grok student that GROK_MODELS_BASE_URL is a different override", () => {
+    expect(target("grok").warnings.join(" ")).toContain("GROK_MODELS_BASE_URL");
   });
 
   it("tells a Pi student on a ChatGPT subscription to use SSE", () => {
@@ -1325,6 +1385,19 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     expect(result.command).toContain("COPILOT_API_URL=http://localhost:8787");
   });
 
+  it("reuses Grok's own template regardless of the wire format chosen, since it has only one", () => {
+    const result = customTarget({
+      agent: "grok",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "anthropic",
+    });
+    expect(result.command).toContain(
+      "GROK_CLI_CHAT_PROXY_BASE_URL=http://localhost:8787/v1"
+    );
+    expect(result.upstreamBaseUrl).toBe("http://localhost:11434");
+  });
+
   it("never borrows Codex's ChatGPT-subscription template for a custom target", () => {
     const result = customTarget({
       agent: "codex",
@@ -1355,6 +1428,7 @@ describe("customTargetNeedsModel", () => {
       expect(customTargetNeedsModel("codex", renderer)).toBe(false);
       expect(customTargetNeedsModel("claude-code", renderer)).toBe(false);
       expect(customTargetNeedsModel("omp", renderer)).toBe(false);
+      expect(customTargetNeedsModel("grok", renderer)).toBe(false);
     }
   });
 });
