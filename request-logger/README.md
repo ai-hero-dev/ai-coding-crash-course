@@ -104,18 +104,19 @@ logged.
 The tool prints the correct command for you, so you do not have to copy anything
 from this table. It is here so you can see what is supported before you start.
 
-| Agent          | Works | What you need                                 |
-| -------------- | ----- | --------------------------------------------- |
+| Agent          | Works | What you need                                                                            |
+| -------------- | ----- | ---------------------------------------------------------------------------------------- |
 | Claude Code    | Yes   | One command. Works with a subscription login, an Anthropic API key, or Google Vertex AI. |
-| Codex          | Yes   | One flag. A subscription or an API key works. |
-| GitHub Copilot | Yes   | Your normal subscription login.               |
-| OpenCode       | Yes   | One command, or a config file.                |
-| Pi             | Yes   | A config file. Pi has no base URL variable.   |
-| OMP            | Yes   | A YAML config file. Point it at any backend.  |
-| Gemini CLI     | Yes   | One command. The free Google login works.     |
-| Junie          | Yes   | A config file, and a real API key pasted in — see below. |
-| Cursor CLI     | No    | Nothing can make it work. See below.          |
-| Amp            | No    | Nothing can make it work. See below.          |
+| Codex          | Yes   | One flag. A subscription or an API key works.                                            |
+| GitHub Copilot | Yes   | Your normal subscription login.                                                          |
+| Grok           | Yes   | One command. A grok.com login or an API key works.                                       |
+| OpenCode       | Yes   | One command, or a config file.                                                           |
+| Pi             | Yes   | A config file. Pi has no base URL variable.                                              |
+| OMP            | Yes   | A YAML config file. Point it at any backend.                                             |
+| Gemini CLI     | Yes   | One command. The free Google login works.                                                |
+| Junie          | Yes   | A config file, and a real API key pasted in — see below.                                 |
+| Cursor CLI     | No    | Nothing can make it work. See below.                                                     |
+| Amp            | No    | Nothing can make it work. See below.                                                     |
 
 Any other provider — a local model server, or a smaller hosted one — works
 through **Custom base URL**, above, on any agent in this table except Cursor
@@ -256,6 +257,8 @@ Different agents fan out differently, and that is worth watching:
 
 - **OpenCode** never counts tokens. Instead it makes a second call with a small
   model to title the thread, so one turn writes exactly two captures.
+- **Grok** titles the session with a second model call too, so one turn can
+  write two captures — the same shape as OpenCode.
 - **Pi** never counts tokens at all, so every file is a real turn.
 - **Gemini** on the free Google login makes several extra calls that carry no
   prompt. Those are not logged either.
@@ -314,7 +317,11 @@ Be fair to the tool when you judge a failure.
   by driving them against a local listener. They were not each run through a
   full course of the lesson. Claude Code on Google Vertex AI is in this
   group — verified against Anthropic's own Vertex documentation, not yet
-  driven against a real Vertex project.
+  driven against a real Vertex project. Grok is in this group too — verified
+  against xAI's published CLI docs (`GROK_CLI_CHAT_PROXY_BASE_URL`, the
+  default `https://cli-chat-proxy.grok.com/v1` host, and the OpenAI Responses
+  wire format) and by driving a live `grok -p` turn through this proxy. It
+  has not been run through a full course of the lesson.
 - **Junie is the least-verified entry in the catalogue.** Junie CLI is
   closed source, so unlike every other agent here its entry was not checked
   against real source, only against JetBrains' published Junie CLI docs

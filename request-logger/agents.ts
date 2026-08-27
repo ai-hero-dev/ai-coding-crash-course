@@ -481,6 +481,33 @@ const AGENTS: AgentEntry[] = [
     ],
   },
   {
+    id: "grok",
+    label: "Grok",
+    providers: [
+      {
+        id: "xai",
+        label: "xAI",
+        upstreamHost: "cli-chat-proxy.grok.com",
+        renderer: "openai",
+        suffix: "/v1",
+        env: [["GROK_CLI_CHAT_PROXY_BASE_URL", "{baseUrl}"]],
+        bin: "grok",
+        notes: [
+          "This works with a grok.com login and with an XAI_API_KEY. Your " +
+            "login stays active. Only the model traffic moves.",
+          "Grok also makes a second model call to title the session, so one " +
+            "turn can write two captures. That is what it really sends.",
+        ],
+        warnings: [
+          "GROK_MODELS_BASE_URL is a different override. If it is already " +
+            "set, Grok talks to that host instead of the CLI chat proxy this " +
+            "command points at, and your logs folder stays empty. Unset it " +
+            "for this run.",
+        ],
+      },
+    ],
+  },
+  {
     id: "cursor",
     label: "Cursor CLI",
     reason:
