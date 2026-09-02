@@ -707,6 +707,41 @@ const AGENTS: AgentEntry[] = [
     ],
   },
   {
+    id: "antigravity",
+    label: "Antigravity CLI (agy)",
+    providers: [
+      {
+        id: "google-login",
+        label: "Free Google account login",
+        upstreamHost: "cloudcode-pa.googleapis.com",
+        renderer: "gemini",
+        env: [["CLOUD_CODE_URL", "{baseUrl}"]],
+        bin: "agy",
+        notes: [
+          "This is the free tier. You do not need to buy anything to finish the lesson.",
+          "On this route Antigravity also makes several housekeeping calls that carry no " +
+            "prompt. This tool forwards them but does not log them, so your logs " +
+            "folder holds real turns only.",
+        ],
+      },
+      {
+        id: "api-key",
+        label: "Gemini API key",
+        upstreamHost: "generativelanguage.googleapis.com",
+        renderer: "gemini",
+        env: [["GOOGLE_GEMINI_BASE_URL", "{baseUrl}"]],
+        bin: "agy",
+        customTemplateFor: ["openai", "anthropic", "raw"],
+        warnings: [
+          "The two Antigravity routes use different variables and they are not " +
+            "interchangeable. GOOGLE_GEMINI_BASE_URL is ignored under a Google " +
+            "account login, and CLOUD_CODE_URL is ignored under an API key. " +
+            "Neither one gives you an error. You just get an empty logs folder.",
+        ],
+      },
+    ],
+  },
+  {
     id: "junie",
     label: "Junie",
     // Junie is BYOK across several backends (OpenAI, Anthropic, Google, xAI,
