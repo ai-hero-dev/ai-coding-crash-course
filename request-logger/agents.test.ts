@@ -83,6 +83,7 @@ describe("listAgents", () => {
       "pi",
       "omp",
       "gemini",
+      "antigravity",
       "junie",
       "cursor",
       "amp",
@@ -487,6 +488,18 @@ describe("resolveChoice — commands", () => {
     );
     expect(target("gemini", "google-login").command).not.toContain(
       "GOOGLE_GEMINI_BASE_URL"
+    );
+  });
+
+  it("uses the CLOUD_CODE_URL variable for an Antigravity Google login", () => {
+    expect(target("antigravity", "google-login").command).toBe(
+      "CLOUD_CODE_URL=http://localhost:8787 agy"
+    );
+  });
+
+  it("uses the GOOGLE_GEMINI_BASE_URL variable for an Antigravity API key", () => {
+    expect(target("antigravity", "api-key").command).toBe(
+      "GOOGLE_GEMINI_BASE_URL=http://localhost:8787 agy"
     );
   });
 
