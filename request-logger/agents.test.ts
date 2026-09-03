@@ -871,7 +871,12 @@ describe("resolveChoice — custom base URL", () => {
     expect(result.upstreamBaseUrl).toBe("https://api.deepseek.com");
   });
 
-  it("strips a path from the typed base URL, the same way the catalogue keeps a bare host", () => {
+  it("keeps a path segment from the typed base URL instead of discarding it", () => {
+    // Regression test for #74: a custom base URL like OpenCode Go's
+    // https://opencode.ai/zen/go carries a path prefix the upstream actually
+    // needs. Reducing this to origin-only silently drops it, and proxy.ts
+    // then forwards to https://opencode.ai/v1/chat/completions — a 404 —
+    // instead of https://opencode.ai/zen/go/v1/chat/completions.
     const result = customTarget({
       agent: "opencode",
       provider: CUSTOM_ID,
@@ -879,7 +884,20 @@ describe("resolveChoice — custom base URL", () => {
       customRenderer: "openai",
       customModel: "test-model",
     });
-    expect(result.upstreamBaseUrl).toBe("https://api.deepseek.com");
+    expect(result.upstreamBaseUrl).toBe(
+      "https://api.deepseek.com/v1/some/path"
+    );
+  });
+
+  it("drops a trailing slash from a typed path prefix, so proxy.ts never joins a doubled slash", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "https://opencode.ai/zen/go/",
+      customRenderer: "openai",
+      customModel: "test-model",
+    });
+    expect(result.upstreamBaseUrl).toBe("https://opencode.ai/zen/go");
   });
 
   it("rejects a base URL with no scheme", () => {

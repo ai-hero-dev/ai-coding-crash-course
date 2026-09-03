@@ -9,6 +9,7 @@ import {
   rejectUpgrade,
   trackBurst,
   upstreamConnection,
+  upstreamPathPrefix,
   type BurstState,
 } from "./proxy";
 
@@ -125,6 +126,61 @@ describe("upstreamConnection", () => {
       port: 8443,
       useHttps: true,
     });
+  });
+});
+
+describe("upstreamPathPrefix", () => {
+  // Regression coverage for #74: OpenCode Go's custom base URL,
+  // https://opencode.ai/zen/go, carries a path prefix the upstream actually
+  // needs. agents.ts used to reduce every CustomTarget's upstreamBaseUrl to
+  // `.origin`, silently dropping it, so handle() forwarded requests straight
+  // to the bare host and every request 404'd — a working manual curl to the
+  // full path, but a broken one through the proxy.
+  it("is empty for a catalogue target, which never carries a path", () => {
+    const target = proxyTarget(
+      { agent: "claude-code", provider: "anthropic" },
+      PORT
+    );
+    expect(upstreamPathPrefix(target)).toBe("");
+  });
+
+  it("is empty for a custom target whose base URL is a bare origin", () => {
+    const target = proxyTarget(
+      {
+        agent: "omp",
+        customBaseUrl: "https://api.deepseek.com",
+        customRenderer: "raw",
+      },
+      PORT
+    );
+    expect(upstreamPathPrefix(target)).toBe("");
+  });
+
+  it("carries the path segment from a custom base URL with one", () => {
+    const target = proxyTarget(
+      {
+        agent: "omp",
+        customBaseUrl: "https://opencode.ai/zen/go",
+        customRenderer: "raw",
+      },
+      PORT
+    );
+    expect(upstreamPathPrefix(target)).toBe("/zen/go");
+  });
+
+  it("joins against the agent's own request path with no doubled or missing slash", () => {
+    const target = proxyTarget(
+      {
+        agent: "omp",
+        customBaseUrl: "https://opencode.ai/zen/go",
+        customRenderer: "raw",
+      },
+      PORT
+    );
+    const reqPath = "/v1/chat/completions";
+    expect(upstreamPathPrefix(target) + reqPath).toBe(
+      "/zen/go/v1/chat/completions"
+    );
   });
 });
 
