@@ -104,18 +104,19 @@ logged.
 The tool prints the correct command for you, so you do not have to copy anything
 from this table. It is here so you can see what is supported before you start.
 
-| Agent          | Works | What you need                                 |
-| -------------- | ----- | --------------------------------------------- |
-| Claude Code    | Yes   | One command. Works with a subscription login, an Anthropic API key, or Google Vertex AI. |
-| Codex          | Yes   | One flag. A subscription or an API key works. |
-| GitHub Copilot | Yes   | Your normal subscription login.               |
-| OpenCode       | Yes   | One command, or a config file.                |
-| Pi             | Yes   | A config file. Pi has no base URL variable.   |
-| OMP            | Yes   | A YAML config file. Point it at any backend.  |
-| Gemini CLI     | Yes   | One command. The free Google login works.     |
-| Junie          | Yes   | A config file, and a real API key pasted in — see below. |
-| Cursor CLI     | No    | Nothing can make it work. See below.          |
-| Amp            | No    | Nothing can make it work. See below.          |
+| Agent           | Works | What you need                                                                            |
+| --------------- | ----- | ---------------------------------------------------------------------------------------- |
+| Claude Code     | Yes   | One command. Works with a subscription login, an Anthropic API key, or Google Vertex AI. |
+| Codex           | Yes   | One flag. A subscription or an API key works.                                            |
+| GitHub Copilot  | Yes   | Your normal subscription login.                                                          |
+| OpenCode        | Yes   | One command, or a config file.                                                           |
+| Pi              | Yes   | A config file. Pi has no base URL variable.                                              |
+| OMP             | Yes   | A YAML config file. Point it at any backend.                                             |
+| Gemini CLI      | Yes   | One command. The free Google login works.                                                |
+| Antigravity CLI | Yes   | A config file and a real Gemini API key — see below.                                     |
+| Junie           | Yes   | A config file, and a real API key pasted in — see below.                                 |
+| Cursor CLI      | No    | Nothing can make it work. See below.                                                     |
+| Amp             | No    | Nothing can make it work. See below.                                                     |
 
 Any other provider — a local model server, or a smaller hosted one — works
 through **Custom base URL**, above, on any agent in this table except Cursor
@@ -135,6 +136,32 @@ logs folder stays empty with no error at all.
 This route only covers `CLOUD_ML_REGION=global`, the default and most common
 setting. A regional value (`us-east5`, say) talks to a different host and
 is not wired up yet — ask for it via the issue tracker if you hit this.
+
+### Antigravity CLI
+
+Antigravity CLI (`agy`) is a separate Google product from Gemini CLI — a
+different binary, a different agent harness — not a rebrand of it. Its API-key
+route, though, stores its settings under Gemini CLI's own directory
+(`~/.gemini/antigravity-cli/settings.json`) and calls the public Gemini API
+directly, reading the exact same `GOOGLE_GEMINI_BASE_URL` variable Gemini
+CLI's own API-key route reads. That means the existing `gemini` renderer
+already reads this capture correctly — no new wire format was needed, only a
+catalogue entry.
+
+Two things must both be true before Antigravity CLI takes this route at all,
+rather than falling back to its own account sign-in:
+
+- `modelProvider` is `"gemini"` in the settings file the wizard writes for you, and
+- `GEMINI_API_KEY` is exported in your shell — this tool does not set it, the
+  same way it does not set `ANTHROPIC_API_KEY` for Claude Code's own API-key
+  route.
+
+Only this API-key route is covered. Antigravity CLI's default account
+sign-in was not verified — Antigravity CLI is closed source, and public
+reporting on the related Antigravity IDE suggests its account-login traffic
+can go to a different, internal host rather than the Code Assist host Gemini
+CLI's own free login uses. Ask for it via the issue tracker if you need it
+logged.
 
 ### Junie
 
@@ -322,6 +349,12 @@ Be fair to the tool when you judge a failure.
   against a real Junie install. If the proxy `kind`, the config file's
   precise shape, or the header format is wrong, that is the likely reason,
   and the fix is one line in `agents.ts`.
+- **Antigravity CLI is verified against published docs only, the same way
+  Junie is.** Antigravity CLI is also closed source. Its API-key route was
+  checked against Google's own Antigravity CLI documentation (installation,
+  authentication and the `GOOGLE_GEMINI_BASE_URL` variable), not against real
+  source or a real install, and its account sign-in route was not verified
+  at all — see "Antigravity CLI" above for why that route is left out.
 - **A custom base URL is only as tested as the agent it is attached to.** The
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
