@@ -77,7 +77,12 @@ export interface CustomTarget {
   agentLabel: string;
   /** Always "Custom base URL": there is no catalogue provider label to show. */
   providerLabel: string;
-  /** The scheme+host[+port] the student typed, with any path stripped. */
+  /**
+   * The scheme+host[+port] the student typed, plus any path prefix it
+   * carried (e.g. https://opencode.ai/zen/go). proxy.ts joins that prefix
+   * against each request's own path when forwarding — see
+   * upstreamPathPrefix in proxy.ts.
+   */
   upstreamBaseUrl: string;
   renderer: RendererId;
   baseUrl: string;
@@ -1030,6 +1035,20 @@ function parseUpstreamUrl(raw: string): URL | null {
 }
 
 /**
+ * The upstream a CustomTarget forwards to: origin plus any path prefix the
+ * student typed, e.g. https://opencode.ai/zen/go. A bare origin's pathname
+ * is "/", which collapses to nothing here so a path-free base URL still
+ * round-trips to exactly its origin. Any trailing slash on a typed prefix is
+ * dropped too, so proxy.ts can join this against a leading-slash request
+ * path (e.g. /v1/chat/completions) with plain concatenation and never
+ * produce a doubled or missing slash.
+ */
+function upstreamBaseUrlWithPath(url: URL): string {
+  const prefix = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${prefix}`;
+}
+
+/**
  * Which catalogue provider a custom target borrows its command, environment
  * variable and setup file from. A custom target has no ProviderEntry of its
  * own, but every agent still needs a real bin to print, and most need a real
@@ -1177,7 +1196,7 @@ function resolveCustomTarget(
       agent: agent.id,
       agentLabel: agent.label,
       providerLabel: CUSTOM_LABEL,
-      upstreamBaseUrl: upstream.origin,
+      upstreamBaseUrl: upstreamBaseUrlWithPath(upstream),
       renderer,
       baseUrl,
       command:
@@ -1244,7 +1263,7 @@ function resolveCustomTarget(
       agent: agent.id,
       agentLabel: agent.label,
       providerLabel: CUSTOM_LABEL,
-      upstreamBaseUrl: upstream.origin,
+      upstreamBaseUrl: upstreamBaseUrlWithPath(upstream),
       renderer,
       baseUrl,
       command: buildCommand(template, baseUrl, platform),
@@ -1267,7 +1286,7 @@ function resolveCustomTarget(
     agent: agent.id,
     agentLabel: agent.label,
     providerLabel: CUSTOM_LABEL,
-    upstreamBaseUrl: upstream.origin,
+    upstreamBaseUrl: upstreamBaseUrlWithPath(upstream),
     renderer,
     baseUrl,
     command: template ? buildCommand(template, baseUrl, platform) : agent.id,

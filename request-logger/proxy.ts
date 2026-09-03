@@ -86,6 +86,28 @@ export function upstreamConnection(target: ProxyTarget): {
 }
 
 /**
+ * The path prefix a CustomTarget's base URL carries, if any — e.g.
+ * "/zen/go" for https://opencode.ai/zen/go. Empty for a bare origin, and
+ * always empty for a catalogue ResolvedTarget, which never carries one (see
+ * upstreamHost). handle() prepends this to each request's own path so a
+ * student-typed base URL with a path segment is not silently dropped —
+ * without it, https://opencode.ai/zen/go would forward to
+ * https://opencode.ai/v1/chat/completions instead of
+ * https://opencode.ai/zen/go/v1/chat/completions, a 404.
+ *
+ * agents.ts already strips a trailing slash and collapses a bare "/" to ""
+ * before this is stored, so plain concatenation against a leading-slash
+ * request path never produces a doubled or missing slash — but the
+ * stripping is repeated here too, since nothing stops a test or a future
+ * caller from constructing a CustomTarget by hand with a trailing slash.
+ */
+export function upstreamPathPrefix(target: ProxyTarget): string {
+  if (target.kind === "target") return "";
+  const { pathname } = new URL(target.upstreamBaseUrl);
+  return pathname === "/" ? "" : pathname.replace(/\/+$/, "");
+}
+
+/**
  * Headers forwarded upstream. We strip hop-by-hop headers, and we ask for an
  * uncompressed response so the capture is readable, then recompute the length
  * against the buffered body.
@@ -116,6 +138,12 @@ function handle(
   target: ProxyTarget
 ): void {
   const reqPath = req.url ?? "/";
+  // The path actually sent upstream: the agent's own request path, prefixed
+  // with whatever path segment the student's custom base URL carried (e.g.
+  // "/zen/go" + "/v1/chat/completions"). Empty prefix, catalogue target or
+  // path-free custom target alike, leaves reqPath untouched — see
+  // upstreamPathPrefix.
+  const upstreamPath = upstreamPathPrefix(target) + reqPath;
 
   const bodyChunks: Buffer[] = [];
   req.on("data", (chunk: Buffer) => bodyChunks.push(chunk));
@@ -154,7 +182,7 @@ function handle(
     const requestOptions: http.RequestOptions = {
       hostname,
       port,
-      path: reqPath,
+      path: upstreamPath,
       method: req.method,
       headers: {
         ...forwardHeaders(req.headers, body),
