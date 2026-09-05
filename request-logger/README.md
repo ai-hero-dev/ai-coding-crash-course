@@ -328,7 +328,7 @@ of these happened:
 5. **You are on an older Codex, or following an older guide.** Codex used to
    read an OPENAI_BASE_URL variable. Version 0.133.0 does not. It ignores the
    variable in silence, so the only sign is an empty logs folder. Use the
-   command this tool prints.
+   command this tool prints exactly, including its quote placement.
 
 ## How much this was tested
 
