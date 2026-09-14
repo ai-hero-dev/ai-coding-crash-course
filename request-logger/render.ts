@@ -34,11 +34,22 @@ interface RenderInput {
   responseRaw: string;
 }
 
+/**
+ * Headers whose value is a credential, so the capture shows that they were sent
+ * without showing what was sent.
+ *
+ * `x-amz-security-token` belongs here for the same reason as the rest, and is
+ * easy to miss because it does not read like an auth header: AWS SigV4 splits
+ * its credential across two headers, and that one carries the whole session
+ * token. A capture that redacts `authorization` and prints this one is still a
+ * capture with usable credentials in it.
+ */
 const REDACT = new Set([
   "authorization",
   "x-api-key",
   "api-key",
   "x-goog-api-key",
+  "x-amz-security-token",
 ]);
 
 /**
@@ -113,12 +124,32 @@ export function renderMarkdown(input: RenderInput): string {
   );
 }
 
-/** Most APIs name the model in the body. Gemini names it in the URL. */
+/**
+ * Most APIs name the model in the body. Gemini, Vertex and Bedrock name it in
+ * the URL, and not in the same shape.
+ *
+ * Bedrock is read first and by its own pattern because its two path delimiters
+ * are the other way round: the model sits between `/model/` and `/invoke`, and
+ * the ID itself may contain a colon (`…-v1:0`), so it runs to the next slash.
+ * The Gemini and Vertex form is the opposite — `models/{model}:generateContent`
+ * — where a colon is where the model stops and the method name begins.
+ */
 function findModel(reqJson: any, path: string): string {
   if (typeof reqJson?.model === "string") return reqJson.model;
+  const fromBedrock = path.match(/\/model\/([^/?]+)\/invoke/);
+  if (fromBedrock) return safeDecodeUri(fromBedrock[1]);
   const fromPath = path.match(/models\/([^:/?]+)/);
   if (fromPath) return fromPath[1];
   return "unknown";
+}
+
+/** A malformed escape in a captured path must not fail the whole document. */
+function safeDecodeUri(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function renderMeta(input: RenderInput, model: string): string {

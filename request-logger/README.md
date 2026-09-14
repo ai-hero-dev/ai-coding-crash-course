@@ -342,6 +342,12 @@ Be fair to the tool when you judge a failure.
   full course of the lesson. Claude Code on Google Vertex AI is in this
   group — verified against Anthropic's own Vertex documentation, not yet
   driven against a real Vertex project.
+- **AWS Bedrock's signing was checked against AWS's own published SigV4 test
+  vectors, and streaming was run end to end against a real Bedrock
+  endpoint.** It has not been driven through a full course lesson the way the
+  direct Anthropic route and OMP have been. Region and profile are read from
+  the shell running this tool, not the shell running Claude Code — the two
+  can silently disagree; see the notes printed for this provider.
 - **Junie is the least-verified entry in the catalogue.** Junie CLI is
   closed source, so unlike every other agent here its entry was not checked
   against real source, only against JetBrains' published Junie CLI docs
