@@ -88,8 +88,8 @@ export function upstreamConnection(target: ProxyTarget): {
 /**
  * The path prefix a CustomTarget's base URL carries, if any — e.g.
  * "/zen/go" for https://opencode.ai/zen/go. Empty for a bare origin, and
- * always empty for a catalogue ResolvedTarget, which never carries one (see
- * upstreamHost). handle() prepends this to each request's own path so a
+ * empty for a catalogue ResolvedTarget unless its provider declares one
+ * (Vertex AI's "/v1"). handle() prepends this to each request's own path so a
  * student-typed base URL with a path segment is not silently dropped —
  * without it, https://opencode.ai/zen/go would forward to
  * https://opencode.ai/v1/chat/completions instead of
@@ -102,7 +102,7 @@ export function upstreamConnection(target: ProxyTarget): {
  * caller from constructing a CustomTarget by hand with a trailing slash.
  */
 export function upstreamPathPrefix(target: ProxyTarget): string {
-  if (target.kind === "target") return "";
+  if (target.kind === "target") return target.upstreamPathPrefix ?? "";
   const { pathname } = new URL(target.upstreamBaseUrl);
   return pathname === "/" ? "" : pathname.replace(/\/+$/, "");
 }
@@ -408,7 +408,9 @@ function field(label: string, value: string): void {
 function printBanner(target: ProxyTarget): void {
   const rule = dim("-".repeat(72));
   const forwards =
-    target.kind === "target" ? `https://${target.upstreamHost}` : target.upstreamBaseUrl;
+    target.kind === "target"
+      ? `https://${target.upstreamHost}${target.upstreamPathPrefix ?? ""}`
+      : target.upstreamBaseUrl;
   console.log("");
   console.log(rule);
   field("Agent", bold(`${target.agentLabel} (${target.providerLabel})`));
@@ -475,7 +477,7 @@ async function main(): Promise<void> {
   let choice = force ? null : loadChoice(STATE_FILE);
   if (!choice) choice = await ask(!force);
 
-  let resolution = resolveChoice(choice, { port: PORT, platform: process.platform });
+  let resolution = resolveChoice(choice, { port: PORT, platform: process.platform, env: process.env });
 
   // A saved choice the catalogue no longer understands is not the student's
   // fault. Ask again rather than making them find the flag.
@@ -484,7 +486,7 @@ async function main(): Promise<void> {
     console.log(`[request-logger] ${resolution.message}`);
     // A saved file exists, so the student already asked to be remembered.
     choice = await ask(false);
-    resolution = resolveChoice(choice, { port: PORT, platform: process.platform });
+    resolution = resolveChoice(choice, { port: PORT, platform: process.platform, env: process.env });
   }
 
   if (resolution.kind === "error") {

@@ -22,6 +22,19 @@ describe("the remembered answer", () => {
     expect(loadChoice(file)).toEqual({ agent: "codex", provider: "chatgpt" });
   });
 
+  it("reads back the Vertex AI region", () => {
+    saveChoice(file, {
+      agent: "claude-code",
+      provider: "vertex",
+      region: "eu",
+    });
+    expect(loadChoice(file)).toEqual({
+      agent: "claude-code",
+      provider: "vertex",
+      region: "eu",
+    });
+  });
+
   it("reads back an agent that has one provider only", () => {
     saveChoice(file, { agent: "claude-code" });
     expect(loadChoice(file)).toEqual({

@@ -144,6 +144,14 @@ describe("upstreamPathPrefix", () => {
     expect(upstreamPathPrefix(target)).toBe("");
   });
 
+  it("is /v1 for Claude Code on Vertex AI", () => {
+    const target = proxyTarget(
+      { agent: "claude-code", provider: "vertex" },
+      PORT
+    );
+    expect(upstreamPathPrefix(target)).toBe("/v1");
+  });
+
   it("is empty for a custom target whose base URL is a bare origin", () => {
     const target = proxyTarget(
       {

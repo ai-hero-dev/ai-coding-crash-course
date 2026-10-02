@@ -8,6 +8,7 @@ import {
   listAgents,
   listProviders,
   OTHER_ID,
+  providerNeedsRegion,
   resolveChoice,
   shouldLogRequest,
   type AgentChoice,
@@ -653,9 +654,9 @@ describe("resolveChoice — notes and warnings", () => {
     expect(notes).toContain("silently ignored");
   });
 
-  it("tells a Vertex AI student this entry only covers the global region", () => {
+  it("tells a Vertex AI student the region must match CLOUD_ML_REGION", () => {
     expect(target("claude-code", "vertex").notes.join(" ")).toContain(
-      "CLOUD_ML_REGION=global"
+      "must match the CLOUD_ML_REGION"
     );
   });
 
@@ -1592,5 +1593,68 @@ describe("resolveChoice — Junie", () => {
 
   it("rejects Junie with no base URL", () => {
     expect(resolveChoice({ agent: "junie" }, PORT).kind).toBe("error");
+  });
+});
+
+describe("Claude Code on Vertex AI and the chosen region", () => {
+  function vertex(region?: string, env: NodeJS.ProcessEnv = {}) {
+    return resolveChoice(
+      { agent: "claude-code", provider: "vertex", region },
+      { ...PORT, env }
+    );
+  }
+
+  it.each([
+    [undefined, "aiplatform.googleapis.com"],
+    ["", "aiplatform.googleapis.com"],
+    ["global", "aiplatform.googleapis.com"],
+    ["eu", "aiplatform.eu.rep.googleapis.com"],
+    ["us", "aiplatform.us.rep.googleapis.com"],
+    ["us-east5", "us-east5-aiplatform.googleapis.com"],
+    [" EU ", "aiplatform.eu.rep.googleapis.com"],
+  ])("resolves region %j to host %s, with a /v1 prefix", (region, host) => {
+    const result = vertex(region);
+    expect(result.kind).toBe("target");
+    if (result.kind !== "target") return;
+    expect(result.upstreamHost).toBe(host);
+    expect(result.upstreamPathPrefix).toBe("/v1");
+  });
+
+  it("ignores CLOUD_ML_REGION when choosing the host", () => {
+    const result = vertex("eu", { CLOUD_ML_REGION: "us-east5" });
+    expect(result.kind === "target" && result.upstreamHost).toBe(
+      "aiplatform.eu.rep.googleapis.com"
+    );
+  });
+
+  it("refuses a region that is not a valid host label", () => {
+    expect(vertex("evil.com/x").kind).toBe("error");
+  });
+
+  it("notes a shell CLOUD_ML_REGION that differs from the saved region", () => {
+    const result = vertex("eu", { CLOUD_ML_REGION: "us-east5" });
+    const notes = result.kind === "target" ? result.notes.join(" ") : "";
+    expect(notes).toContain('CLOUD_ML_REGION is "us-east5"');
+    expect(notes).toContain('"eu"');
+  });
+
+  it("stays quiet when the shell region matches, or is unset", () => {
+    for (const env of [{ CLOUD_ML_REGION: "EU" }, {}]) {
+      const result = vertex("eu", env);
+      const notes = result.kind === "target" ? result.notes.join(" ") : "";
+      expect(notes).not.toContain("in this shell");
+    }
+  });
+
+  it("gives other providers no path prefix", () => {
+    expect(
+      target("claude-code", "anthropic").upstreamPathPrefix
+    ).toBeUndefined();
+  });
+
+  it("asks for a region only on Claude Code's Vertex AI route", () => {
+    expect(providerNeedsRegion("claude-code", "vertex")).toBe(true);
+    expect(providerNeedsRegion("claude-code", "anthropic")).toBe(false);
+    expect(providerNeedsRegion("codex", "vertex")).toBe(false);
   });
 });
