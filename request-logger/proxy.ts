@@ -199,7 +199,9 @@ function handle(
         res.writeHead(502, { "content-type": "application/json" });
       }
       res.end(
-        JSON.stringify({ error: `request-logger upstream error: ${err.message}` })
+        JSON.stringify({
+          error: `request-logger upstream error: ${err.message}`,
+        })
       );
     });
 
@@ -230,7 +232,9 @@ export function rejectUpgrade(req: http.IncomingMessage, socket: Duplex): void {
       `[request-logger] ${req.method ?? "GET"} ${req.url ?? "/"} tried a WebSocket upgrade -> 426 (forcing HTTP fallback)`
     )
   );
-  socket.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+  socket.end(
+    "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+  );
 }
 
 interface Capture {
@@ -288,7 +292,11 @@ export interface BurstResult {
   justDetected: boolean;
 }
 
-export function burstKey(method: string, reqPath: string, statusCode: number): string {
+export function burstKey(
+  method: string,
+  reqPath: string,
+  statusCode: number
+): string {
   return `${method} ${reqPath} ${statusCode}`;
 }
 
@@ -364,8 +372,14 @@ function writeCapture(c: Capture): void {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     // The raw file keeps the bytes exactly as they arrived, so the request can
     // still be replayed. Only the .md is decoded.
-    fs.writeFileSync(path.join(LOG_DIR, `${c.base}.request.txt`), c.requestBody);
-    fs.writeFileSync(path.join(LOG_DIR, `${c.base}.response.txt`), c.responseRaw);
+    fs.writeFileSync(
+      path.join(LOG_DIR, `${c.base}.request.txt`),
+      c.requestBody
+    );
+    fs.writeFileSync(
+      path.join(LOG_DIR, `${c.base}.response.txt`),
+      c.responseRaw
+    );
     fs.writeFileSync(
       path.join(LOG_DIR, `${c.base}.md`),
       renderMarkdown({
@@ -477,7 +491,11 @@ async function main(): Promise<void> {
   let choice = force ? null : loadChoice(STATE_FILE);
   if (!choice) choice = await ask(!force);
 
-  let resolution = resolveChoice(choice, { port: PORT, platform: process.platform, env: process.env });
+  let resolution = resolveChoice(choice, {
+    port: PORT,
+    platform: process.platform,
+    env: process.env,
+  });
 
   // A saved choice the catalogue no longer understands is not the student's
   // fault. Ask again rather than making them find the flag.
@@ -486,7 +504,11 @@ async function main(): Promise<void> {
     console.log(`[request-logger] ${resolution.message}`);
     // A saved file exists, so the student already asked to be remembered.
     choice = await ask(false);
-    resolution = resolveChoice(choice, { port: PORT, platform: process.platform, env: process.env });
+    resolution = resolveChoice(choice, {
+      port: PORT,
+      platform: process.platform,
+      env: process.env,
+    });
   }
 
   if (resolution.kind === "error") {
@@ -524,7 +546,9 @@ async function main(): Promise<void> {
     const rule = dim("-".repeat(72));
     console.log("");
     console.log(rule);
-    console.log(`  ${bold(resolution.agentLabel)} cannot be logged by this tool.`);
+    console.log(
+      `  ${bold(resolution.agentLabel)} cannot be logged by this tool.`
+    );
     console.log(rule);
     console.log("");
     for (const line of wrap(resolution.reason, 68)) console.log(`  ${line}`);
@@ -537,7 +561,9 @@ async function main(): Promise<void> {
     );
     console.log(dim("  Only the first kind can ever be inspected."));
     console.log("");
-    console.log("  To follow the lesson, install one of the other agents, then run:");
+    console.log(
+      "  To follow the lesson, install one of the other agents, then run:"
+    );
     console.log("");
     console.log(`      ${bold("npm run request-logger")}`);
     console.log("");
@@ -580,7 +606,8 @@ function wrap(text: string, width: number): string[] {
 // run request-logger`, or `tsx request-logger/proxy.ts`), not when it is
 // imported — the tests import pure functions like upstreamConnection from
 // this module, and must not trigger the interactive wizard by doing so.
-const isMain = path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url);
+const isMain =
+  path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url);
 if (isMain) {
   main().catch((err) => {
     console.error(`[request-logger] ${(err as Error).message}`);

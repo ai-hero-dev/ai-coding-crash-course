@@ -241,7 +241,10 @@ describe("rejectUpgrade", () => {
       // A hang here means the fix regressed to the old silent-drop behavior;
       // fail fast rather than letting vitest's own timeout do it, so the
       // failure message is about the upgrade, not a generic timeout.
-      setTimeout(() => reject(new Error("upgrade attempt was not answered within 1s")), 1000);
+      setTimeout(
+        () => reject(new Error("upgrade attempt was not answered within 1s")),
+        1000
+      );
     });
 
     expect(response).toContain("HTTP/1.1 426");
