@@ -133,9 +133,20 @@ ignored once Vertex mode is on. Picking **Anthropic** here while
 `CLAUDE_CODE_USE_VERTEX=1` is set is the most common way a Vertex student's
 logs folder stays empty with no error at all.
 
-This route only covers `CLOUD_ML_REGION=global`, the default and most common
-setting. A regional value (`us-east5`, say) talks to a different host and
-is not wired up yet — ask for it via the issue tracker if you hit this.
+The wizard asks which Vertex AI region to forward to (free text, default
+`global`):
+
+| Region you type | Forwards to |
+|---|---|
+| `global` | `aiplatform.googleapis.com/v1` |
+| `eu`, `us` (multi-region) | `aiplatform.eu.rep.googleapis.com/v1`, `aiplatform.us.rep.googleapis.com/v1` |
+| a region, e.g. `us-east5` | `us-east5-aiplatform.googleapis.com/v1` |
+
+It must match the `CLOUD_ML_REGION` you run Claude Code with, because Claude
+Code builds its request paths from that variable. The answer is saved with the
+rest of your choice; if `CLOUD_ML_REGION` in the shell that starts
+request-logger differs from it, a note is printed. Run with `--force` to pick a
+different region.
 
 ### Antigravity CLI
 

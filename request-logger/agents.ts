@@ -41,6 +41,12 @@ export interface AgentChoice {
    * routes (see resolveCustomTarget).
    */
   customModel?: string;
+  /**
+   * Only set for a provider that asks for one (see providerNeedsRegion):
+   * the Vertex AI region the student typed, e.g. "global", "eu" or "us-east5".
+   * Absent means "global".
+   */
+  region?: string;
 }
 
 export interface ResolvedTarget {
@@ -51,6 +57,11 @@ export interface ResolvedTarget {
   providerLabel: string;
   /** The single host every request is forwarded to. */
   upstreamHost: string;
+  /**
+   * A path every forwarded request is prefixed with, e.g. "/v1" for Vertex
+   * AI. Absent for a provider whose agent already sends the full path.
+   */
+  upstreamPathPrefix?: string;
   renderer: RendererId;
   /** The base URL the student points their agent at, e.g. http://localhost:8787/v1 */
   baseUrl: string;
@@ -171,6 +182,16 @@ interface ProviderEntry {
   id: string;
   label: string;
   upstreamHost: string;
+  /**
+   * For a provider whose upstream depends on the student's environment
+   * (Vertex AI's region). Overrides upstreamHost when present. An `error`
+   * result is shown to the student instead of starting the proxy.
+   */
+  resolveUpstream?: (
+    choice: AgentChoice,
+    env: NodeJS.ProcessEnv
+  ) =>
+    { host: string; pathPrefix?: string; notes?: string[] } | { error: string };
   renderer: RendererId;
   /**
    * Appended to http://localhost:PORT to make the base URL.
@@ -383,6 +404,81 @@ const OPENCODE_NOTE =
   "reading the variable. The config file below is the durable way to do it.";
 
 /**
+ * Read a Vertex AI region as the student typed it: trimmed and lower-cased,
+ * with an empty answer meaning "global". Undefined when it cannot be a host
+ * label, which keeps a typo from ever reaching a hostname. The wizard
+ * validates with this and vertexUpstream resolves with it, so the two agree.
+ */
+export function normalizeVertexRegion(
+  raw: string | undefined
+): string | undefined {
+  const region = (raw ?? "").trim().toLowerCase() || "global";
+  return /^[a-z][a-z0-9-]*$/.test(region) ? region : undefined;
+}
+
+/**
+ * Whether the wizard should ask which region to forward to. Only Claude
+ * Code on Vertex AI does — its host depends on the region.
+ */
+export function providerNeedsRegion(
+  agentId: string,
+  providerId: string | undefined
+): boolean {
+  return agentId === "claude-code" && providerId === "vertex";
+}
+
+/**
+ * Where Claude Code on Vertex AI sends its requests, given the region the
+ * student picked in the wizard (unset counts as "global").
+ *
+ *  - "global"                 -> aiplatform.googleapis.com
+ *  - "eu" / "us" (multi-region) -> aiplatform.{eu,us}.rep.googleapis.com
+ *  - any other region, e.g. "us-east5" -> {region}-aiplatform.googleapis.com
+ *
+ * The multi-regional host is shaped differently from the single-region one,
+ * which is why a plain `{region}-` template is not enough.
+ *
+ * Claude Code's own default Vertex base URL ends in `/v1`, and it appends
+ * `/projects/...` to whatever ANTHROPIC_VERTEX_BASE_URL says. Pointing that
+ * variable at the proxy drops the `/v1`, so the proxy puts it back.
+ *
+ * Claude Code builds its own request paths from CLOUD_ML_REGION, so a shell
+ * value that differs from the saved answer gets a note, not an error: the
+ * student may know exactly what they are doing.
+ */
+export function vertexUpstream(
+  choice: AgentChoice,
+  env: NodeJS.ProcessEnv
+): { host: string; pathPrefix: string; notes: string[] } | { error: string } {
+  const region = normalizeVertexRegion(choice.region);
+  if (!region) {
+    return {
+      error:
+        `"${choice.region}" is not a valid Vertex AI region. Run with --force ` +
+        `to choose again. Use "global", a multi-region ("eu", "us") or a ` +
+        `region like "us-east5".`,
+    };
+  }
+  const host =
+    region === "global"
+      ? "aiplatform.googleapis.com"
+      : region === "eu" || region === "us"
+        ? `aiplatform.${region}.rep.googleapis.com`
+        : `${region}-aiplatform.googleapis.com`;
+
+  const notes: string[] = [`Forwarding to Vertex AI region "${region}".`];
+  const shell = env.CLOUD_ML_REGION?.trim();
+  if (shell && shell.toLowerCase() !== region) {
+    notes.push(
+      `CLOUD_ML_REGION is "${shell}" in this shell, but you picked "${region}". ` +
+        `Claude Code builds its request paths from CLOUD_ML_REGION, so the ` +
+        `two should match. Run with --force to pick again.`
+    );
+  }
+  return { host, pathPrefix: "/v1", notes };
+}
+
+/**
  * Ordered by popularity, decided 2026-08-06. The wizard shows them in this
  * order, so a student is most likely to find theirs first.
  */
@@ -423,8 +519,10 @@ const AGENTS: AgentEntry[] = [
       {
         id: "vertex",
         label: "Google Vertex AI",
-        // Fixed to the global endpoint on purpose — see the region note below.
+        // The default (global) host. resolveUpstream picks the real one from
+        // the region the student typed in the wizard.
         upstreamHost: "aiplatform.googleapis.com",
+        resolveUpstream: vertexUpstream,
         // Vertex's Claude endpoint is Anthropic's own Messages API shape,
         // routed by URL path instead of a body field — the model ID moves
         // from the body's "model" key into the URL
@@ -449,10 +547,10 @@ const AGENTS: AgentEntry[] = [
             "plain Anthropic route above, is silently ignored in Vertex mode — " +
             "that mismatch is the usual reason a Vertex student's logs folder " +
             "stays empty.",
-          "Only CLOUD_ML_REGION=global is supported by this entry. A regional " +
-            "value (us-east5, say) talks to a different host " +
-            "({region}-aiplatform.googleapis.com), which this entry does not " +
-            "resolve to yet — ask for it via the issue tracker if you hit this.",
+          "The upstream host follows the region you typed in the wizard: " +
+            "global, a multi-region (eu, us) or a single region (us-east5, " +
+            "say). It must match the CLOUD_ML_REGION you run Claude Code " +
+            "with. Run with --force to change it.",
           "ENABLE_TOOL_SEARCH=true matters here for the same reason it does on " +
             "the plain Anthropic route above: a non-default host turns off tool " +
             "search unless this is set.",
@@ -1312,7 +1410,12 @@ function resolveCustomTarget(
  */
 export function resolveChoice(
   choice: AgentChoice,
-  options: { port: number; platform: NodeJS.Platform }
+  options: {
+    port: number;
+    platform: NodeJS.Platform;
+    /** Read only to flag a CLOUD_ML_REGION that disagrees with the saved region. */
+    env?: NodeJS.ProcessEnv;
+  }
 ): Resolution {
   const agent = AGENTS.find((a) => a.id === choice.agent);
 
@@ -1380,13 +1483,25 @@ export function resolveChoice(
 
   const baseUrl = `http://localhost:${options.port}${provider.suffix ?? ""}`;
 
+  let upstreamHost = provider.upstreamHost;
+  let upstreamPathPrefix: string | undefined;
+  let extraNotes: string[] = [];
+  if (provider.resolveUpstream) {
+    const upstream = provider.resolveUpstream(choice, options.env ?? {});
+    if ("error" in upstream) return { kind: "error", message: upstream.error };
+    upstreamHost = upstream.host;
+    upstreamPathPrefix = upstream.pathPrefix;
+    extraNotes = upstream.notes ?? [];
+  }
+
   return {
     kind: "target",
     agent: agent.id,
     agentLabel: agent.label,
     provider: provider.id,
     providerLabel: provider.label,
-    upstreamHost: provider.upstreamHost,
+    upstreamHost,
+    ...(upstreamPathPrefix ? { upstreamPathPrefix } : {}),
     renderer: provider.renderer,
     baseUrl,
     command: buildCommand(provider, baseUrl, options.platform),
@@ -1394,7 +1509,7 @@ export function resolveChoice(
       ...file,
       body: file.body.replace(/\{baseUrl\}/g, baseUrl),
     })),
-    notes: provider.notes ?? [],
+    notes: [...(provider.notes ?? []), ...extraNotes],
     warnings: provider.warnings ?? [],
   };
 }
