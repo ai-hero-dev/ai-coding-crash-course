@@ -14,6 +14,19 @@ export function formatPrice(cents: number | null | undefined): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+const centsFormat = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
+
+/**
+ * Format an amount of money in cents, such as revenue. Unlike formatPrice,
+ * 0 → "$0.00" (not "Free"), and thousands get separators ("$1,234.50").
+ */
+export function formatCents(cents: number): string {
+  return centsFormat.format(cents / 100);
+}
+
 /** Whole days between an ISO timestamp and now. Negative values clamp to 0. */
 export function daysSince(iso: string): number {
   const elapsed = Date.now() - new Date(iso).getTime();
