@@ -42,7 +42,7 @@ import {
 } from "~/components/ui/select";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { AlertTriangle, BarChart3, BookOpen } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, Star } from "lucide-react";
 
 // ─── Instructor Analytics ───
 // One page that answers "how is my teaching business doing". All page state
@@ -335,11 +335,309 @@ function RevenueChart({
   );
 }
 
+function CountFigure({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground">
+        {description}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AudienceFigures({
+  audience,
+  range,
+}: {
+  audience: LoaderData["overview"]["audience"];
+  range: AnalyticsRange;
+}) {
+  const period = ANALYTICS_RANGE_LABELS[range].toLowerCase();
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <CountFigure
+        label="Buyers"
+        value={String(audience.buyers)}
+        description={
+          audience.buyers === 0
+            ? `No one bought a course ${period}.`
+            : `Distinct people who paid, ${period}. A team buyer counts once.`
+        }
+      />
+      <CountFigure
+        label="Students"
+        value={String(audience.students)}
+        description={
+          audience.students === 0
+            ? `No one enrolled ${period}.`
+            : `Distinct people who enrolled, ${period}, by purchase or team seat.`
+        }
+      />
+      <CountFigure
+        label="Revenue per student"
+        value={formatCents(audience.revenuePerStudentCents)}
+        description={
+          audience.students === 0
+            ? "Shown once students enrol."
+            : "What each enrolled student brought in. Team seats count at their share of the team purchase."
+        }
+      />
+    </div>
+  );
+}
+
+function PanelEmpty({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="py-8 text-center">
+      <p className="font-medium">{title}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+    </div>
+  );
+}
+
+const tableHeadClass =
+  "px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground";
+
+function TopBuyers({
+  buyers,
+  range,
+}: {
+  buyers: LoaderData["overview"]["topBuyers"];
+  range: AnalyticsRange;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Top buyers</CardTitle>
+        <CardDescription>
+          The ten biggest spenders across your courses,{" "}
+          {ANALYTICS_RANGE_LABELS[range].toLowerCase()}. Worth a personal
+          message.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className={buyers.length === 0 ? undefined : "p-0"}>
+        {buyers.length === 0 ? (
+          <PanelEmpty
+            title="No buyers in this period"
+            body="Your biggest customers appear here once people buy. Try a longer range."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-y border-border bg-muted/50">
+                  <th className={tableHeadClass}>#</th>
+                  <th className={tableHeadClass}>Buyer</th>
+                  <th className={tableHeadClass}>Seats</th>
+                  <th className={`${tableHeadClass} text-right`}>
+                    Total spend
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {buyers.map((buyer, index) => (
+                  <tr
+                    key={buyer.userId}
+                    className="border-b border-border last:border-0"
+                  >
+                    <td className="px-4 py-3 text-sm text-muted-foreground tabular-nums">
+                      {index + 1}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{buyer.name}</span>
+                        {buyer.isTeamBuyer && (
+                          <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+                            Team
+                          </span>
+                        )}
+                        {!buyer.enrolled && (
+                          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                            Not enrolled
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {buyer.email}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {buyer.isTeamBuyer ? (
+                        <>
+                          Bought {buyer.seats}
+                          {buyer.unredeemedSeats > 0 ? (
+                            <span className="text-amber-700 dark:text-amber-400">
+                              , {buyer.unredeemedSeats} unused
+                            </span>
+                          ) : (
+                            ", all used"
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium tabular-nums">
+                      {formatCents(buyer.totalSpentCents)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ActionFigures({
+  seats,
+  unansweredQuestions,
+  range,
+}: {
+  seats: LoaderData["overview"]["seats"];
+  unansweredQuestions: number;
+  range: AnalyticsRange;
+}) {
+  const period = ANALYTICS_RANGE_LABELS[range].toLowerCase();
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardDescription>Unanswered questions</CardDescription>
+          <CardTitle className="text-3xl tabular-nums">
+            {unansweredQuestions}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="text-xs text-muted-foreground">
+          {unansweredQuestions === 0 ? (
+            `No student is waiting on an answer to a question asked ${period}.`
+          ) : (
+            <>
+              Questions asked {period} that no one on staff has answered.{" "}
+              <Link
+                to="/instructor/questions"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                Answer them
+              </Link>
+            </>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardDescription>Unredeemed team seats</CardDescription>
+          <CardTitle className="text-3xl tabular-nums">
+            {seats.unredeemed}
+            {seats.sold > 0 && (
+              <span className="text-base font-normal text-muted-foreground">
+                {" "}
+                of {seats.sold}
+              </span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="text-xs text-muted-foreground">
+          {seats.sold === 0
+            ? `No team seats were sold ${period}.`
+            : `Seats bought by teams ${period} that no one has claimed. Chase the team buyers above.`}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Ratings({
+  ratings,
+  range,
+}: {
+  ratings: LoaderData["overview"]["ratings"];
+  range: AnalyticsRange;
+}) {
+  const period = ANALYTICS_RANGE_LABELS[range].toLowerCase();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Course ratings</CardTitle>
+        <CardDescription>
+          {ratings.average === null
+            ? `Ratings given ${period}.`
+            : `${ratings.average} out of 5 from ${ratings.count} rating${ratings.count === 1 ? "" : "s"} given ${period}.`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className={ratings.count === 0 ? undefined : "p-0"}>
+        {ratings.count === 0 ? (
+          <PanelEmpty
+            title="No ratings in this period"
+            body="Students rate a course from its page. Ratings appear here as they come in."
+          />
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="border-y border-border bg-muted/50">
+                <th className={tableHeadClass}>Course</th>
+                <th className={`${tableHeadClass} text-right`}>Average</th>
+                <th className={`${tableHeadClass} text-right`}>Ratings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ratings.courses.map((course) => (
+                <tr
+                  key={course.courseId}
+                  className="border-b border-border last:border-0"
+                >
+                  <td className="px-4 py-3 font-medium">{course.title}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    {course.average === null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1">
+                        <Star className="size-3.5 fill-amber-400 text-amber-400" />
+                        {course.average.toFixed(1)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                    {course.count}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function OverviewTab({ data }: { data: LoaderData }) {
+  const { overview, range } = data;
   return (
     <div className="space-y-6">
-      <RevenueFigures revenue={data.overview.revenue} />
-      <RevenueChart points={data.overview.revenueOverTime} range={data.range} />
+      <RevenueFigures revenue={overview.revenue} />
+      <RevenueChart points={overview.revenueOverTime} range={range} />
+      <AudienceFigures audience={overview.audience} range={range} />
+      <TopBuyers buyers={overview.topBuyers} range={range} />
+      <ActionFigures
+        seats={overview.seats}
+        unansweredQuestions={overview.unansweredQuestions}
+        range={range}
+      />
+      <Ratings ratings={overview.ratings} range={range} />
     </div>
   );
 }
@@ -474,6 +772,12 @@ export function HydrateFallback() {
       </div>
       <Skeleton className="mb-4 h-9 w-56" />
       <div className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-3">
+          <Skeleton className="h-36 w-full" />
+          <Skeleton className="h-36 w-full" />
+          <Skeleton className="h-36 w-full" />
+        </div>
+        <Skeleton className="h-96 w-full" />
         <div className="grid gap-4 md:grid-cols-3">
           <Skeleton className="h-36 w-full" />
           <Skeleton className="h-36 w-full" />
