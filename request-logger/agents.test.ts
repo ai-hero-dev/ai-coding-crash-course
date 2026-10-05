@@ -8,6 +8,7 @@ import {
   listAgents,
   listProviders,
   OTHER_ID,
+  DEFAULT_AWS_REGION,
   resolveChoice,
   shouldLogRequest,
   type AgentChoice,
@@ -24,6 +25,40 @@ function target(agent: string, provider?: string) {
     );
   }
   return result;
+}
+
+/**
+ * Resolve the one provider that signs, with the AWS environment it reads. Both
+ * values come from the shell rather than the catalogue, so they have to be
+ * passed in rather than assumed.
+ */
+function signedTarget(env: { region?: string; awsProfile?: string } = {}) {
+  const result = resolveChoice({ agent: "claude-code", provider: "bedrock" }, {
+    ...PORT,
+    ...env,
+  });
+  if (result.kind !== "target") {
+    throw new Error(`expected a target for claude-code/bedrock, got ${result.kind}`);
+  }
+  return result;
+}
+
+/**
+ * Every (agent, provider) pair that resolves to a plain catalogue target.
+ *
+ * Refused agents have none, and an alwaysCustom agent's providers are only ever
+ * templates for a base URL the student types (see findCustomTemplate), so
+ * neither resolves to a target and both are left out. agentProviders rather than
+ * listProviders, because the latter returns nothing for a single-provider agent.
+ */
+function everyCatalogueTarget(): Array<[string, string]> {
+  return listAgents()
+    .filter((agent) => agent.supported && !agent.alwaysCustom)
+    .flatMap((agent) =>
+      agentProviders(agent.id).map(
+        (provider) => [agent.id, provider.id] as [string, string]
+      )
+    );
 }
 
 /** Resolve a custom-base-url choice, and fail loudly if it was not a usable target. */
@@ -164,10 +199,11 @@ describe("listProviders", () => {
     expect(listProviders("cursor")).toEqual([]);
   });
 
-  it("returns both Claude Code providers", () => {
+  it("returns every Claude Code provider", () => {
     expect(listProviders("claude-code").map((p) => p.id)).toEqual([
       "anthropic",
       "vertex",
+      "bedrock",
     ]);
   });
 
@@ -245,6 +281,26 @@ describe("resolveChoice — upstream hosts", () => {
     expect(target("claude-code", "anthropic").upstreamHost).not.toBe(
       target("claude-code", "vertex").upstreamHost
     );
+  });
+
+  it("sends Claude Code on Bedrock to the region's Bedrock runtime host", () => {
+    expect(
+      signedTarget({ region: "eu-central-1" }).upstreamHost
+    ).toBe("bedrock-runtime.eu-central-1.amazonaws.com");
+  });
+
+  it("falls back to a default region when the environment named none", () => {
+    // Bedrock has no global endpoint, so an unset AWS_REGION cannot be left as
+    // a placeholder in the host — it has to resolve to something.
+    expect(target("claude-code", "bedrock").upstreamHost).toBe(
+      `bedrock-runtime.${DEFAULT_AWS_REGION}.amazonaws.com`
+    );
+  });
+
+  it("leaves no region placeholder in any catalogue host", () => {
+    for (const [agent, provider] of everyCatalogueTarget()) {
+      expect(target(agent, provider).upstreamHost).not.toContain("{");
+    }
   });
 
   it("sends Codex on an API key to OpenAI", () => {
@@ -1592,5 +1648,49 @@ describe("resolveChoice — Junie", () => {
 
   it("rejects Junie with no base URL", () => {
     expect(resolveChoice({ agent: "junie" }, PORT).kind).toBe("error");
+  });
+});
+
+describe("resolveChoice — AWS signing", () => {
+  it("marks Bedrock as needing SigV4 against the Bedrock service", () => {
+    expect(signedTarget({ region: "us-east-1" }).signing).toEqual({
+      kind: "aws-sigv4",
+      service: "bedrock",
+      region: "us-east-1",
+      profile: undefined,
+    });
+  });
+
+  it("carries the profile through, so credentials are read from the right one", () => {
+    expect(signedTarget({ awsProfile: "claude-code-bedrock" }).signing?.profile).toBe(
+      "claude-code-bedrock"
+    );
+  });
+
+  it("signs for the same region it addresses", () => {
+    // Signing for one region and sending to another is a 403 whose message
+    // says nothing about the mismatch, so this is worth pinning.
+    const resolved = signedTarget({ region: "ap-southeast-2" });
+    expect(resolved.upstreamHost).toContain(resolved.signing!.region);
+  });
+
+  it("leaves every other provider forwarding its own credentials untouched", () => {
+    const signing = everyCatalogueTarget().filter(
+      ([agent, provider]) => target(agent, provider).signing !== undefined
+    );
+    expect(signing).toEqual([["claude-code", "bedrock"]]);
+  });
+
+  it("points Claude Code at the base-URL variable Bedrock mode actually reads", () => {
+    // ANTHROPIC_BASE_URL is the plain-Anthropic one and is not documented for
+    // Bedrock mode; getting this wrong is an empty logs folder and no error.
+    const command = signedTarget().command;
+    expect(command).toContain("ANTHROPIC_BEDROCK_BASE_URL=http://localhost:8787");
+    expect(command).toContain("CLAUDE_CODE_USE_BEDROCK=1");
+    expect(command).toContain("ENABLE_TOOL_SEARCH=true");
+  });
+
+  it("reads Bedrock's responses with the Anthropic renderer", () => {
+    expect(signedTarget().renderer).toBe("anthropic");
   });
 });
