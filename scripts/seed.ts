@@ -18,11 +18,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const migrationsFolder = path.resolve(__dirname, "../drizzle");
 
-const sqlite = new Database("data.db");
-sqlite.pragma("journal_mode = WAL");
-sqlite.pragma("foreign_keys = ON");
-
-const db = drizzle(sqlite, { schema });
+// Set by seed(), so the analytics tests can seed an in-memory database.
+let sqlite: Database.Database;
+let db: ReturnType<typeof drizzle<typeof schema>>;
 
 // ─── Helpers ───
 
@@ -50,7 +48,8 @@ function createRandom(seed: number) {
   };
 }
 
-const random = createRandom(42);
+// Reset by seed(), so every run in a process plants the same data.
+let random = createRandom(42);
 
 function slugify(title: string): string {
   return title
@@ -116,7 +115,16 @@ function insertCourseContent(
   return lessonIds;
 }
 
-async function seed() {
+/**
+ * Drops every table in `target`, migrates it, and fills it with the seed
+ * data. `npm run db:seed` calls it on data.db.
+ */
+export async function seed(target: Database.Database) {
+  sqlite = target;
+  sqlite.pragma("foreign_keys = ON");
+  db = drizzle(sqlite, { schema });
+  random = createRandom(42);
+
   console.log("Seeding database...");
 
   // Drop and recreate tables for a clean seed
@@ -2759,4 +2767,9 @@ Draft sales copy. Coming soon.`,
   }
 }
 
-seed().catch(console.error);
+// Seed data.db only when run as a script, not when a test imports seed().
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  const dataDb = new Database("data.db");
+  dataDb.pragma("journal_mode = WAL");
+  seed(dataDb).catch(console.error);
+}

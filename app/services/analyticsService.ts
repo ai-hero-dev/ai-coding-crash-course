@@ -1,12 +1,26 @@
-import { and, asc, desc, eq, gte, ne, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  ne,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { db } from "~/db";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
   CourseStatus,
+  LessonProgressStatus,
   coupons,
   courseRatings,
   courses,
   enrollments,
+  lessonProgress,
+  lessons,
+  modules,
   purchases,
   users,
 } from "~/db/schema";
@@ -454,5 +468,204 @@ export function getOverview(scope: AnalyticsScope) {
     seats: getSeats(scope),
     unansweredQuestions: countUnansweredQuestions(scope),
     ratings: getRatings(scope),
+  };
+}
+
+// ─── Course detail ───
+// The deep dive on one course for the Course detail tab. Extend
+// getCourseDetail with new panels.
+
+export interface CourseDetailScope {
+  courseId: number;
+  range: AnalyticsRange;
+  now?: Date;
+}
+
+/** The ids of the students enrolled in a course, as a subquery. */
+function enrolledUserIds(courseId: number) {
+  return db
+    .select({ userId: enrollments.userId })
+    .from(enrollments)
+    .where(eq(enrollments.courseId, courseId));
+}
+
+/** The course's lessons in course order: module position, then lesson position. */
+function getCourseLessons(courseId: number) {
+  return db
+    .select({
+      id: lessons.id,
+      title: lessons.title,
+      moduleId: modules.id,
+      moduleTitle: modules.title,
+    })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId))
+    .orderBy(asc(modules.position), asc(lessons.position), asc(lessons.id))
+    .all();
+}
+
+interface StudentProgress {
+  completedCount: number;
+  /** 1-based course-order position of the furthest lesson reached, or null. */
+  furthestReached: number | null;
+}
+
+/**
+ * One row per enrolled student with lesson progress in the course. A lesson
+ * is reached when it is in progress or completed. Students with no progress
+ * have no row.
+ */
+function getStudentProgress(courseId: number): StudentProgress[] {
+  // Same order as getCourseLessons.
+  const lessonOrder = db.$with("lesson_order").as(
+    db
+      .select({
+        lessonId: sql<number>`${lessons.id}`.as("ordered_lesson_id"),
+        ordinal:
+          sql<number>`row_number() over (order by ${modules.position}, ${lessons.position}, ${lessons.id})`.as(
+            "ordinal"
+          ),
+      })
+      .from(lessons)
+      .innerJoin(modules, eq(lessons.moduleId, modules.id))
+      .where(eq(modules.courseId, courseId))
+  );
+
+  return db
+    .with(lessonOrder)
+    .select({
+      completedCount: sql<number>`count(distinct case when ${lessonProgress.status} = ${LessonProgressStatus.Completed} then ${lessonProgress.lessonId} end)`,
+      furthestReached: sql<
+        number | null
+      >`max(case when ${lessonProgress.status} in (${LessonProgressStatus.InProgress}, ${LessonProgressStatus.Completed}) then ${lessonOrder.ordinal} end)`,
+    })
+    .from(lessonProgress)
+    .innerJoin(lessonOrder, eq(lessonProgress.lessonId, lessonOrder.lessonId))
+    .where(inArray(lessonProgress.userId, enrolledUserIds(courseId)))
+    .groupBy(lessonProgress.userId)
+    .all();
+}
+
+function countEnrolled(courseId: number): number {
+  const row = db
+    .select({ n: sql<number>`count(distinct ${enrollments.userId})` })
+    .from(enrollments)
+    .where(eq(enrollments.courseId, courseId))
+    .get();
+  return row?.n ?? 0;
+}
+
+/**
+ * Progress is completed lessons over total lessons, not weighted by duration.
+ * A finisher completed every lesson; enrollments.completedAt is rarely set, so
+ * it is not used.
+ */
+function summariseProgress(
+  students: StudentProgress[],
+  enrolledCount: number,
+  totalLessons: number
+) {
+  if (enrolledCount === 0 || totalLessons === 0) {
+    return { enrolledCount, averageProgressPercent: 0, finishedCount: 0 };
+  }
+  const progressSum = students.reduce(
+    (sum, student) => sum + student.completedCount / totalLessons,
+    0
+  );
+  return {
+    enrolledCount,
+    averageProgressPercent: Math.round((progressSum / enrolledCount) * 100),
+    finishedCount: students.filter(
+      (student) => student.completedCount === totalLessons
+    ).length,
+  };
+}
+
+export interface FunnelLesson {
+  id: number;
+  title: string;
+  /** Enrolled students who reached this lesson or a later one. */
+  reachedCount: number;
+  /**
+   * Students lost on the way to this lesson: the previous lesson's count
+   * minus this one's. For the first lesson, enrolled students who never
+   * started.
+   */
+  dropCount: number;
+}
+
+export interface FunnelModule {
+  id: number;
+  title: string;
+  /** Enrolled students who reached the module's first lesson or later. */
+  reachedCount: number;
+  /** Students lost on the way to and inside the module: its lessons' drops. */
+  dropCount: number;
+  lessons: FunnelLesson[];
+}
+
+export interface Funnel {
+  /** The denominator: every bar is a part of this. */
+  enrolledCount: number;
+  modules: FunnelModule[];
+}
+
+/**
+ * The drop-off funnel. Each lesson counts the students who reached at least
+ * that lesson, so a skipped lesson is not a drop and the series only descends.
+ */
+function buildFunnel(
+  courseLessons: ReturnType<typeof getCourseLessons>,
+  students: StudentProgress[],
+  enrolledCount: number
+): Funnel {
+  const reachedAtLeast = (position: number) =>
+    students.filter((student) => (student.furthestReached ?? 0) >= position)
+      .length;
+
+  const modulesById = new Map<number, FunnelModule>();
+  let previousCount = enrolledCount;
+  courseLessons.forEach((lesson, index) => {
+    const reachedCount = reachedAtLeast(index + 1);
+    const dropCount = previousCount - reachedCount;
+    previousCount = reachedCount;
+
+    let mod = modulesById.get(lesson.moduleId);
+    if (!mod) {
+      mod = {
+        id: lesson.moduleId,
+        title: lesson.moduleTitle,
+        reachedCount,
+        dropCount: 0,
+        lessons: [],
+      };
+      modulesById.set(lesson.moduleId, mod);
+    }
+    mod.dropCount += dropCount;
+    mod.lessons.push({
+      id: lesson.id,
+      title: lesson.title,
+      reachedCount,
+      dropCount,
+    });
+  });
+
+  return { enrolledCount, modules: [...modulesById.values()] };
+}
+
+/**
+ * The deep dive on one course. Progress and the funnel come from lesson
+ * progress, which has no start timestamp, so they are all time: the range
+ * does not apply to them.
+ */
+export function getCourseDetail(scope: CourseDetailScope) {
+  const courseLessons = getCourseLessons(scope.courseId);
+  const enrolledCount = countEnrolled(scope.courseId);
+  const students = getStudentProgress(scope.courseId);
+
+  return {
+    progress: summariseProgress(students, enrolledCount, courseLessons.length),
+    funnel: buildFunnel(courseLessons, students, enrolledCount),
   };
 }
