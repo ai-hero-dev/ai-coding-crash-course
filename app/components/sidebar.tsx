@@ -5,7 +5,6 @@ import { UserRole } from "~/db/schema";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   BookOpen,
-  ChartColumn,
   LayoutDashboard,
   GraduationCap,
   MessageSquare,
@@ -67,12 +66,6 @@ const navItems: NavItem[] = [
     to: "/instructor",
     icon: <GraduationCap className="size-4" />,
     roles: [UserRole.Instructor],
-  },
-  {
-    label: "Analytics",
-    to: "/instructor/analytics",
-    icon: <ChartColumn className="size-4" />,
-    roles: [UserRole.Instructor, UserRole.Admin],
   },
   {
     label: "Questions",

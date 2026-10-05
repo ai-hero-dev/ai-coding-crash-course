@@ -142,6 +142,7 @@ function getCourseLessonIds(courseId: number): number[] {
 export function calculateProgress(
   userId: number,
   courseId: number,
+  includeQuizzes: boolean,
   weightByDuration: boolean
 ) {
   const lessonIds = getCourseLessonIds(courseId);
