@@ -479,7 +479,7 @@ describe("resolveChoice — commands", () => {
 
   it("carries the suffix through into the OpenCode command", () => {
     expect(target("opencode", "anthropic").command).toBe(
-      "ANTHROPIC_BASE_URL=http://localhost:8787/v1 opencode"
+      "ANTHROPIC_BASE_URL=http://localhost:8787/v1 opencode --standalone"
     );
   });
 
@@ -591,6 +591,16 @@ describe("resolveChoice — setup files", () => {
     expect(target("opencode", "anthropic").setup[0].body).toContain(
       "{env:ANTHROPIC_API_KEY}"
     );
+  });
+
+  it("writes OpenCode's config files in the V2 shape on every route", () => {
+    for (const provider of ["anthropic", "openai"]) {
+      const body = target("opencode", provider).setup[0].body;
+      expect(body).toContain('"providers"');
+      expect(body).toContain('"settings"');
+      expect(body).not.toContain('"provider"');
+      expect(body).not.toContain('"options"');
+    }
   });
 
   it("gives Claude Code no config file to write", () => {
@@ -1083,7 +1093,10 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       customRenderer: "openai",
       customModel: "qwen3:8b",
     });
-    const assignment = result.command.slice(0, -" opencode".length);
+    const assignment = result.command.slice(
+      0,
+      -" opencode --standalone".length
+    );
     const serialized = execFileSync(
       "/bin/sh",
       [
@@ -1094,12 +1107,15 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     );
     const config = JSON.parse(serialized);
 
-    expect(config.provider["request-logger"]).toEqual({
-      npm: "@ai-sdk/openai-compatible",
+    expect(config.providers["request-logger"]).toEqual({
       name: "Request Logger",
-      options: { baseURL: "http://localhost:8787/v1" },
+      package: "@opencode/ai/providers/openai-compatible",
+      settings: { baseURL: "http://localhost:8787/v1" },
       models: { "qwen3:8b": { name: "qwen3:8b" } },
     });
+    expect(config).not.toHaveProperty("provider");
+    expect(JSON.stringify(config)).not.toContain("@ai-sdk/");
+    expect(JSON.stringify(config)).not.toContain('"options"');
     expect(config.model).toBe("request-logger/qwen3:8b");
     expect(config.small_model).toBe("request-logger/qwen3:8b");
     expect(result.setup).toEqual([]);
@@ -1114,7 +1130,10 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       customRenderer: "openai",
       customModel: model,
     });
-    const assignment = result.command.slice(0, -" opencode".length);
+    const assignment = result.command.slice(
+      0,
+      -" opencode --standalone".length
+    );
     const serialized = execFileSync(
       "/bin/sh",
       [
@@ -1126,7 +1145,7 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     const config = JSON.parse(serialized);
 
     expect(config.model).toBe(`request-logger/${model}`);
-    expect(config.provider["request-logger"].models).toEqual({
+    expect(config.providers["request-logger"].models).toEqual({
       [model]: { name: model },
     });
   });
@@ -1176,7 +1195,7 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       throw new Error(`expected a custom-target, got ${result.kind}`);
     }
     expect(result.command).toBe(
-      "$env:ANTHROPIC_BASE_URL = 'http://localhost:8787/v1'; opencode"
+      "$env:ANTHROPIC_BASE_URL = 'http://localhost:8787/v1'; opencode --standalone"
     );
   });
 
@@ -1189,7 +1208,37 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
       customModel: "test-model",
     });
     expect(result.command).toContain("OPENCODE_CONFIG_CONTENT=");
+    expect(result.command.endsWith("opencode --standalone")).toBe(true);
     expect(result.setup).toEqual([]);
+  });
+
+  it("puts --standalone on every OpenCode command, so the configuration is read", () => {
+    for (const provider of ["anthropic", "openai"] as const) {
+      expect(target("opencode", provider).command).toContain(
+        "opencode --standalone"
+      );
+    }
+    for (const renderer of ["openai", "anthropic", "raw"] as const) {
+      const result = customTarget({
+        agent: "opencode",
+        provider: CUSTOM_ID,
+        customBaseUrl: "http://localhost:11434",
+        customRenderer: renderer,
+        customModel: "qwen3:8b",
+      });
+      expect(result.command).toContain("opencode --standalone");
+    }
+  });
+
+  it("explains the --standalone flag in the banner notes", () => {
+    const result = customTarget({
+      agent: "opencode",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:11434",
+      customRenderer: "openai",
+      customModel: "qwen3:8b",
+    });
+    expect(result.notes.join(" ")).toContain("--standalone");
   });
 
   it("uses PowerShell syntax for OpenCode's temporary config on win32", () => {
@@ -1209,7 +1258,7 @@ describe("resolveChoice — custom base URL, per-agent command template", () => 
     expect(result.command.startsWith("$env:OPENCODE_CONFIG_CONTENT = '")).toBe(
       true
     );
-    expect(result.command.endsWith("; opencode")).toBe(true);
+    expect(result.command.endsWith("; opencode --standalone")).toBe(true);
     expect(result.command).not.toContain("OPENCODE_CONFIG_CONTENT=$env");
     expect(result.command).not.toMatch(/^OPENCODE_CONFIG_CONTENT=/);
   });

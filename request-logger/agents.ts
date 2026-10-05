@@ -382,6 +382,16 @@ const OPENCODE_NOTE =
   "no base URL of its own for this provider, so the bundled SDK falls back to " +
   "reading the variable. The config file below is the durable way to do it.";
 
+const OPENCODE_STANDALONE_NOTE =
+  "The --standalone flag is essential, not decoration. OpenCode connects to an " +
+  "already-running background service when there is one, and that service holds " +
+  "the configuration — so without this flag your agent would use the service's " +
+  "settings, ignore the command above entirely, and send its traffic straight to " +
+  "the provider. This flag gives it a private server that does read the " +
+  "configuration. If you would rather use the background service, stop it first " +
+  "(opencode service stop), then start it again with the command above in that " +
+  "same terminal.";
+
 /**
  * Ordered by popularity, decided 2026-08-06. The wizard shows them in this
  * order, so a student is most likely to find theirs first.
@@ -544,6 +554,7 @@ const AGENTS: AgentEntry[] = [
         suffix: "/v1",
         env: [["ANTHROPIC_BASE_URL", "{baseUrl}"]],
         bin: "opencode",
+        args: ["--standalone"],
         customTemplateFor: ["anthropic"],
         setup: [
           {
@@ -554,9 +565,9 @@ const AGENTS: AgentEntry[] = [
               '  "$schema": "https://opencode.ai/config.json",',
               '  "model": "anthropic/claude-sonnet-4-5",',
               '  "small_model": "anthropic/claude-sonnet-4-5",',
-              '  "provider": {',
+              '  "providers": {',
               '    "anthropic": {',
-              '      "options": {',
+              '      "settings": {',
               '        "apiKey": "{env:ANTHROPIC_API_KEY}",',
               '        "baseURL": "{baseUrl}"',
               "      }",
@@ -568,6 +579,7 @@ const AGENTS: AgentEntry[] = [
         ],
         notes: [
           OPENCODE_NOTE,
+          OPENCODE_STANDALONE_NOTE,
           "OpenCode never counts tokens. Instead it makes a second call with its " +
             "small model to title the thread, so one turn writes exactly two captures.",
         ],
@@ -580,6 +592,7 @@ const AGENTS: AgentEntry[] = [
         suffix: "/v1",
         env: [["OPENAI_BASE_URL", "{baseUrl}"]],
         bin: "opencode",
+        args: ["--standalone"],
         // Also the catch-all for "raw"/not sure: a third-party server behind
         // a custom base URL is far more often OpenAI-compatible than
         // Anthropic-compatible, so this is the better default guess.
@@ -593,9 +606,9 @@ const AGENTS: AgentEntry[] = [
               '  "$schema": "https://opencode.ai/config.json",',
               '  "model": "openai/gpt-5.1",',
               '  "small_model": "openai/gpt-5.1",',
-              '  "provider": {',
+              '  "providers": {',
               '    "openai": {',
-              '      "options": {',
+              '      "settings": {',
               '        "apiKey": "{env:OPENAI_API_KEY}",',
               '        "baseURL": "{baseUrl}"',
               "      }",
@@ -607,6 +620,7 @@ const AGENTS: AgentEntry[] = [
         ],
         notes: [
           OPENCODE_NOTE,
+          OPENCODE_STANDALONE_NOTE,
           "OpenCode uses a different system prompt for each provider. Run it once " +
             "against Anthropic and once against OpenAI and compare the two captures.",
         ],
@@ -1181,11 +1195,11 @@ function resolveCustomTarget(
     const config = JSON.stringify({
       model: selectedModel,
       small_model: selectedModel,
-      provider: {
+      providers: {
         [providerId]: {
-          npm: "@ai-sdk/openai-compatible",
           name: "Request Logger",
-          options: { baseURL: baseUrl },
+          package: "@opencode/ai/providers/openai-compatible",
+          settings: { baseURL: baseUrl },
           models: { [model]: { name: model } },
         },
       },
@@ -1201,12 +1215,13 @@ function resolveCustomTarget(
       baseUrl,
       command:
         platform === "win32"
-          ? `$env:OPENCODE_CONFIG_CONTENT = ${powerShellQuote(config)}; opencode`
-          : `OPENCODE_CONFIG_CONTENT=${shellQuote(config)} opencode`,
+          ? `$env:OPENCODE_CONFIG_CONTENT = ${powerShellQuote(config)}; opencode --standalone`
+          : `OPENCODE_CONFIG_CONTENT=${shellQuote(config)} opencode --standalone`,
       setup: [],
       notes: [
         "This temporary provider is merged with your existing OpenCode " +
           "configuration for this run only; your config file is not changed.",
+        OPENCODE_STANDALONE_NOTE,
       ],
       warnings: [],
     };
