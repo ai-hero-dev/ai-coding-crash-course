@@ -32,7 +32,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     const progress = calculateProgress(
       currentUserId,
       enrollment.courseId,
-      false,
       false
     );
     const completedLessons = getCompletedLessonCount(

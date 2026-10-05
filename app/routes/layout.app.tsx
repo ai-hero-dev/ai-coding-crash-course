@@ -31,7 +31,6 @@ export async function loader({ request }: Route.LoaderArgs) {
         const progress = calculateProgress(
           currentUserId,
           course.courseId,
-          false,
           false
         );
         return {
