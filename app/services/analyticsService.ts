@@ -10,7 +10,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { db } from "~/db";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias, type SQLiteColumn } from "drizzle-orm/sqlite-core";
 import {
   CourseStatus,
   LessonProgressStatus,
@@ -27,18 +27,14 @@ import {
   users,
 } from "~/db/schema";
 import { PLATFORM_FEE_RATE, type AnalyticsRange } from "~/lib/analytics";
-import { getCountryTierInfo } from "~/lib/ppp";
+import { PPP_TIERS, getCountryTierInfo } from "~/lib/ppp";
 import { getUnansweredQuestions } from "~/services/commentService";
 
+// ─── Analytics Service ───
+// Read-only roll-ups for the instructor analytics page.
+// Uses positional parameters (project convention).
+
 export type { AnalyticsRange };
-
-export interface AnalyticsScope {
-  instructorId: number | null;
-  range: AnalyticsRange;
-  now?: Date;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const RANGE_DAYS: Record<AnalyticsRange, number | null> = {
   "7d": 7,
@@ -52,34 +48,53 @@ const RANGE_DAYS: Record<AnalyticsRange, number | null> = {
  * time. The cutoff is INCLUSIVE: a row made exactly `days` ago is in range.
  * Timestamps are ISO strings, so string comparison orders them correctly.
  */
-function resolveCutoff(scope: AnalyticsScope): string | null {
-  const days = RANGE_DAYS[scope.range];
+function resolveCutoff(range: AnalyticsRange, now: Date): string | null {
+  const days = RANGE_DAYS[range];
   if (days === null) return null;
-  const now = scope.now ?? new Date();
-  return new Date(now.getTime() - days * DAY_MS).toISOString();
+  return addUtcDays(now, -days).toISOString();
 }
 
-/** Filters for purchases joined to courses: instructor scope and range. */
-function purchaseConditions(scope: AnalyticsScope): SQL[] {
-  const conditions: SQL[] = [];
-  if (scope.instructorId !== null) {
-    conditions.push(eq(courses.instructorId, scope.instructorId));
-  }
-  const cutoff = resolveCutoff(scope);
-  if (cutoff !== null) {
-    conditions.push(gte(purchases.createdAt, cutoff));
-  }
-  return conditions;
+/** UTC days have no DST shifts, so this moves by exactly 24h per day. */
+function addUtcDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
 }
 
-function getRevenue(scope: AnalyticsScope) {
+/**
+ * The instructor filter and the range cutoff as one condition. A null
+ * instructorId (platform-wide) or a null cutoff (all time) drops that part;
+ * with neither, the result is undefined, which Drizzle reads as no filter.
+ * The instructor part needs `courses` in the query.
+ */
+function scopeFilter(
+  instructorId: number | null,
+  dateColumn?: SQLiteColumn,
+  cutoff: string | null = null
+): SQL | undefined {
+  return and(
+    instructorId === null ? undefined : eq(courses.instructorId, instructorId),
+    dateColumn === undefined || cutoff === null
+      ? undefined
+      : gte(dateColumn, cutoff)
+  );
+}
+
+/** Course order: module position, then lesson position, then id for ties. */
+const LESSON_ORDER: SQL[] = [
+  asc(modules.position),
+  asc(lessons.position),
+  asc(lessons.id),
+];
+
+function getRevenue(instructorId: number | null, cutoff: string | null) {
   const row = db
     .select({
       gross: sql<number>`coalesce(sum(${purchases.amountPaid}), 0)`,
     })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(and(...purchaseConditions(scope)))
+    .where(scopeFilter(instructorId, purchases.createdAt, cutoff))
     .get();
 
   const grossCents = row?.gross ?? 0;
@@ -102,7 +117,7 @@ const PERIOD_LENGTH: Record<Granularity, number> = { day: 10, month: 7 };
 function nextPeriod(period: string, granularity: Granularity): string {
   if (granularity === "day") {
     const date = new Date(`${period}T00:00:00.000Z`);
-    return new Date(date.getTime() + DAY_MS).toISOString().slice(0, 10);
+    return addUtcDays(date, 1).toISOString().slice(0, 10);
   }
   const [year, month] = period.split("-").map(Number);
   return new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 7);
@@ -112,8 +127,13 @@ function nextPeriod(period: string, granularity: Granularity): string {
  * Gross revenue per period, with a zero for each period without sales, from
  * the range start (or the first sale, for all time) up to now.
  */
-function getRevenueOverTime(scope: AnalyticsScope): RevenuePoint[] {
-  const granularity: Granularity = scope.range === "all" ? "month" : "day";
+function getRevenueOverTime(
+  instructorId: number | null,
+  range: AnalyticsRange,
+  now: Date
+): RevenuePoint[] {
+  const granularity: Granularity = range === "all" ? "month" : "day";
+  const cutoff = resolveCutoff(range, now);
   const length = PERIOD_LENGTH[granularity];
   const periodExpr = sql<string>`substr(${purchases.createdAt}, 1, ${length})`;
 
@@ -124,16 +144,15 @@ function getRevenueOverTime(scope: AnalyticsScope): RevenuePoint[] {
     })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(and(...purchaseConditions(scope)))
+    .where(scopeFilter(instructorId, purchases.createdAt, cutoff))
     .groupBy(periodExpr)
     .orderBy(periodExpr)
     .all();
 
-  const cutoff = resolveCutoff(scope);
   const first = cutoff?.slice(0, length) ?? rows[0]?.period;
   if (first === undefined) return [];
 
-  const last = (scope.now ?? new Date()).toISOString().slice(0, length);
+  const last = now.toISOString().slice(0, length);
   const grossByPeriod = new Map(rows.map((row) => [row.period, row.gross]));
 
   const points: RevenuePoint[] = [];
@@ -163,41 +182,24 @@ export function getAnalyticsCourses(
   return db
     .select({ id: courses.id, title: courses.title, status: courses.status })
     .from(courses)
-    .where(
-      instructorId === null ? undefined : eq(courses.instructorId, instructorId)
-    )
+    .where(scopeFilter(instructorId))
     .orderBy(asc(courses.title))
     .all();
 }
 
 function hasPublishedCourse(instructorId: number | null): boolean {
-  const conditions: SQL[] = [eq(courses.status, CourseStatus.Published)];
-  if (instructorId !== null) {
-    conditions.push(eq(courses.instructorId, instructorId));
-  }
   const row = db
     .select({ id: courses.id })
     .from(courses)
-    .where(and(...conditions))
+    .where(
+      and(eq(courses.status, CourseStatus.Published), scopeFilter(instructorId))
+    )
     .limit(1)
     .get();
   return row !== undefined;
 }
 
 // ─── Overview: buyers, students, leaderboard, questions, ratings ───
-
-/** Filters for enrollments joined to courses: instructor scope and range. */
-function enrollmentConditions(scope: AnalyticsScope): SQL[] {
-  const conditions: SQL[] = [];
-  if (scope.instructorId !== null) {
-    conditions.push(eq(courses.instructorId, scope.instructorId));
-  }
-  const cutoff = resolveCutoff(scope);
-  if (cutoff !== null) {
-    conditions.push(gte(enrollments.enrolledAt, cutoff));
-  }
-  return conditions;
-}
 
 export interface Audience {
   /** Distinct people who bought in range. A team buyer counts once. */
@@ -216,7 +218,10 @@ export interface Audience {
  * that minted the coupon: its amount over its seat count. Without this walk,
  * students on team seats bring nothing and teams look worthless.
  */
-function getStudentRevenue(scope: AnalyticsScope): number {
+function getStudentRevenue(
+  instructorId: number | null,
+  cutoff: string | null
+): number {
   const enrolled = db
     .selectDistinct({
       userId: enrollments.userId,
@@ -224,7 +229,7 @@ function getStudentRevenue(scope: AnalyticsScope): number {
     })
     .from(enrollments)
     .innerJoin(courses, eq(enrollments.courseId, courses.id))
-    .where(and(...enrollmentConditions(scope)))
+    .where(scopeFilter(instructorId, enrollments.enrolledAt, cutoff))
     .as("enrolled");
 
   const bought = alias(purchases, "bought");
@@ -262,23 +267,26 @@ function getStudentRevenue(scope: AnalyticsScope): number {
   return Math.round(row?.total ?? 0);
 }
 
-function getAudience(scope: AnalyticsScope): Audience {
+function getAudience(
+  instructorId: number | null,
+  cutoff: string | null
+): Audience {
   const buyers = db
     .select({ count: sql<number>`count(distinct ${purchases.userId})` })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(and(...purchaseConditions(scope)))
+    .where(scopeFilter(instructorId, purchases.createdAt, cutoff))
     .get();
 
   const students = db
     .select({ count: sql<number>`count(distinct ${enrollments.userId})` })
     .from(enrollments)
     .innerJoin(courses, eq(enrollments.courseId, courses.id))
-    .where(and(...enrollmentConditions(scope)))
+    .where(scopeFilter(instructorId, enrollments.enrolledAt, cutoff))
     .get();
 
   const studentCount = students?.count ?? 0;
-  const studentRevenueCents = getStudentRevenue(scope);
+  const studentRevenueCents = getStudentRevenue(instructorId, cutoff);
   return {
     buyers: buyers?.count ?? 0,
     students: studentCount,
@@ -306,7 +314,10 @@ export interface TopBuyer {
 
 const TOP_BUYER_LIMIT = 10;
 
-function getTopBuyers(scope: AnalyticsScope): TopBuyer[] {
+function getTopBuyers(
+  instructorId: number | null,
+  cutoff: string | null
+): TopBuyer[] {
   const seat = alias(coupons, "seat");
   const enrolment = alias(enrollments, "enrolment");
   const enrolledCourse = alias(courses, "enrolled_course");
@@ -319,9 +330,9 @@ function getTopBuyers(scope: AnalyticsScope): TopBuyer[] {
     where ${seat.purchaseId} = ${purchases.id} and ${seat.redeemedByUserId} is null
   )), 0)`;
   const instructorFilter =
-    scope.instructorId === null
+    instructorId === null
       ? sql``
-      : sql`and ${enrolledCourse.instructorId} = ${scope.instructorId}`;
+      : sql`and ${enrolledCourse.instructorId} = ${instructorId}`;
   const enrolledExpr = sql<number>`exists (
     select 1 from ${enrollments} ${enrolment}
     inner join ${courses} ${enrolledCourse} on ${enrolledCourse.id} = ${enrolment.courseId}
@@ -342,7 +353,7 @@ function getTopBuyers(scope: AnalyticsScope): TopBuyer[] {
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
     .innerJoin(users, eq(purchases.userId, users.id))
-    .where(and(...purchaseConditions(scope)))
+    .where(scopeFilter(instructorId, purchases.createdAt, cutoff))
     .groupBy(users.id)
     .orderBy(desc(totalExpr), asc(users.name))
     .limit(TOP_BUYER_LIMIT)
@@ -367,7 +378,10 @@ export interface SeatSummary {
   unredeemed: number;
 }
 
-function getSeats(scope: AnalyticsScope): SeatSummary {
+function getSeats(
+  instructorId: number | null,
+  cutoff: string | null
+): SeatSummary {
   const row = db
     .select({
       sold: sql<number>`count(*)`,
@@ -376,18 +390,18 @@ function getSeats(scope: AnalyticsScope): SeatSummary {
     .from(coupons)
     .innerJoin(purchases, eq(coupons.purchaseId, purchases.id))
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(and(...purchaseConditions(scope)))
+    .where(scopeFilter(instructorId, purchases.createdAt, cutoff))
     .get();
 
   return { sold: row?.sold ?? 0, unredeemed: row?.unredeemed ?? 0 };
 }
 
-/** Open questions on courses in scope, asked in range. */
-function countUnansweredQuestions(scope: AnalyticsScope): number {
-  const cutoff = resolveCutoff(scope);
-  const questions = getUnansweredQuestions(scope.instructorId);
-  if (cutoff === null) return questions.length;
-  return questions.filter((question) => question.createdAt >= cutoff).length;
+/**
+ * Open questions on courses in scope, over all time. A question still waits
+ * however old it is, so the range does not apply.
+ */
+function countUnansweredQuestions(instructorId: number | null): number {
+  return getUnansweredQuestions(instructorId).length;
 }
 
 export interface CourseRatings {
@@ -414,17 +428,10 @@ function roundRating(average: number): number {
  * Ratings given (or last changed) in range. A rating is a current opinion,
  * so its updatedAt is the date that counts.
  */
-function getRatings(scope: AnalyticsScope): RatingsSummary {
-  const cutoff = resolveCutoff(scope);
-  const joinConditions: SQL[] = [eq(courseRatings.courseId, courses.id)];
-  if (cutoff !== null) {
-    joinConditions.push(gte(courseRatings.updatedAt, cutoff));
-  }
-  const courseConditions: SQL[] = [ne(courses.status, CourseStatus.Draft)];
-  if (scope.instructorId !== null) {
-    courseConditions.push(eq(courses.instructorId, scope.instructorId));
-  }
-
+function getRatings(
+  instructorId: number | null,
+  cutoff: string | null
+): RatingsSummary {
   const rows = db
     .select({
       courseId: courses.id,
@@ -433,8 +440,16 @@ function getRatings(scope: AnalyticsScope): RatingsSummary {
       count: sql<number>`count(${courseRatings.id})`,
     })
     .from(courses)
-    .leftJoin(courseRatings, and(...joinConditions))
-    .where(and(...courseConditions))
+    .leftJoin(
+      courseRatings,
+      and(
+        eq(courseRatings.courseId, courses.id),
+        scopeFilter(null, courseRatings.updatedAt, cutoff)
+      )
+    )
+    .where(
+      and(ne(courses.status, CourseStatus.Draft), scopeFilter(instructorId))
+    )
     .groupBy(courses.id)
     .orderBy(asc(courses.title))
     .all();
@@ -460,29 +475,32 @@ function getRatings(scope: AnalyticsScope): RatingsSummary {
 
 /**
  * The cross-course roll-up for the Overview tab. Extend this with new panels.
+ * Pass null as instructorId for the whole platform (admins). `now` is for
+ * tests. Unanswered questions are all time: the range does not apply.
  */
-export function getOverview(scope: AnalyticsScope) {
+export function getOverview(
+  instructorId: number | null,
+  range: AnalyticsRange,
+  now: Date = new Date()
+) {
+  const cutoff = resolveCutoff(range, now);
   return {
-    hasPublishedCourse: hasPublishedCourse(scope.instructorId),
-    revenue: getRevenue(scope),
-    revenueOverTime: getRevenueOverTime(scope),
-    audience: getAudience(scope),
-    topBuyers: getTopBuyers(scope),
-    seats: getSeats(scope),
-    unansweredQuestions: countUnansweredQuestions(scope),
-    ratings: getRatings(scope),
+    hasPublishedCourse: hasPublishedCourse(instructorId),
+    revenue: getRevenue(instructorId, cutoff),
+    revenueOverTime: getRevenueOverTime(instructorId, range, now),
+    audience: getAudience(instructorId, cutoff),
+    topBuyers: getTopBuyers(instructorId, cutoff),
+    seats: getSeats(instructorId, cutoff),
+    unansweredQuestions: countUnansweredQuestions(instructorId),
+    ratings: getRatings(instructorId, cutoff),
   };
 }
+
+export type Overview = ReturnType<typeof getOverview>;
 
 // ─── Course detail ───
 // The deep dive on one course for the Course detail tab. Extend
 // getCourseDetail with new panels.
-
-export interface CourseDetailScope {
-  courseId: number;
-  range: AnalyticsRange;
-  now?: Date;
-}
 
 /** The ids of the students enrolled in a course, as a subquery. */
 function enrolledUserIds(courseId: number) {
@@ -492,7 +510,7 @@ function enrolledUserIds(courseId: number) {
     .where(eq(enrollments.courseId, courseId));
 }
 
-/** The course's lessons in course order: module position, then lesson position. */
+/** The course's lessons in course order (LESSON_ORDER). */
 function getCourseLessons(courseId: number) {
   return db
     .select({
@@ -504,7 +522,7 @@ function getCourseLessons(courseId: number) {
     .from(lessons)
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
     .where(eq(modules.courseId, courseId))
-    .orderBy(asc(modules.position), asc(lessons.position), asc(lessons.id))
+    .orderBy(...LESSON_ORDER)
     .all();
 }
 
@@ -520,13 +538,12 @@ interface StudentProgress {
  * have no row.
  */
 function getStudentProgress(courseId: number): StudentProgress[] {
-  // Same order as getCourseLessons.
   const lessonOrder = db.$with("lesson_order").as(
     db
       .select({
         lessonId: sql<number>`${lessons.id}`.as("ordered_lesson_id"),
         ordinal:
-          sql<number>`row_number() over (order by ${modules.position}, ${lessons.position}, ${lessons.id})`.as(
+          sql<number>`row_number() over (order by ${sql.join(LESSON_ORDER, sql`, `)})`.as(
             "ordinal"
           ),
       })
@@ -552,11 +569,11 @@ function getStudentProgress(courseId: number): StudentProgress[] {
 
 function countEnrolled(courseId: number): number {
   const row = db
-    .select({ n: sql<number>`count(distinct ${enrollments.userId})` })
+    .select({ count: sql<number>`count(distinct ${enrollments.userId})` })
     .from(enrollments)
     .where(eq(enrollments.courseId, courseId))
     .get();
-  return row?.n ?? 0;
+  return row?.count ?? 0;
 }
 
 /**
@@ -634,19 +651,19 @@ function buildFunnel(
     const dropCount = previousCount - reachedCount;
     previousCount = reachedCount;
 
-    let mod = modulesById.get(lesson.moduleId);
-    if (!mod) {
-      mod = {
+    let funnelModule = modulesById.get(lesson.moduleId);
+    if (!funnelModule) {
+      funnelModule = {
         id: lesson.moduleId,
         title: lesson.moduleTitle,
         reachedCount,
         dropCount: 0,
         lessons: [],
       };
-      modulesById.set(lesson.moduleId, mod);
+      modulesById.set(lesson.moduleId, funnelModule);
     }
-    mod.dropCount += dropCount;
-    mod.lessons.push({
+    funnelModule.dropCount += dropCount;
+    funnelModule.lessons.push({
       id: lesson.id,
       title: lesson.title,
       reachedCount,
@@ -674,13 +691,10 @@ export interface QuizPassRate {
  * score (a passed attempt wins a tie), judged by its stored passed flag. This
  * matches the student roster. A quiz with no attempts still has a row.
  */
-function getQuizPassRates(scope: CourseDetailScope): QuizPassRate[] {
-  const cutoff = resolveCutoff({ instructorId: null, ...scope });
-  const attemptConditions: SQL[] = [];
-  if (cutoff !== null) {
-    attemptConditions.push(gte(quizAttempts.attemptedAt, cutoff));
-  }
-
+function getQuizPassRates(
+  courseId: number,
+  cutoff: string | null
+): QuizPassRate[] {
   const ranked = db.$with("ranked_attempt").as(
     db
       .select({
@@ -691,7 +705,7 @@ function getQuizPassRates(scope: CourseDetailScope): QuizPassRate[] {
         ),
       })
       .from(quizAttempts)
-      .where(and(...attemptConditions))
+      .where(scopeFilter(null, quizAttempts.attemptedAt, cutoff))
   );
 
   const rows = db
@@ -707,14 +721,9 @@ function getQuizPassRates(scope: CourseDetailScope): QuizPassRate[] {
     .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
     .leftJoin(ranked, and(eq(ranked.quizId, quizzes.id), eq(ranked.rank, 1)))
-    .where(eq(modules.courseId, scope.courseId))
+    .where(eq(modules.courseId, courseId))
     .groupBy(quizzes.id)
-    .orderBy(
-      asc(modules.position),
-      asc(lessons.position),
-      asc(lessons.id),
-      asc(quizzes.id)
-    )
+    .orderBy(...LESSON_ORDER, asc(quizzes.id))
     .all();
 
   return rows.map((row) => ({
@@ -734,15 +743,16 @@ export interface CountryRevenue {
   /**
    * The country's CURRENT PPP tier label, or null for no country. The
    * discount a purchase got is not stored, so this is not reconstructed.
+   * When the course has PPP turned off, every country is full price.
    */
   discountLabel: string | null;
-  /** The country's current tier gives a discount. */
+  /** The course has PPP on and the country's current tier gives a discount. */
   discounted: boolean;
 }
 
 export interface CountryRevenueSummary {
   totalCents: number;
-  /** Revenue from countries whose current tier gives a discount. */
+  /** Revenue from countries marked discounted. 0 when PPP is off. */
   discountedCents: number;
   purchaseCount: number;
   /** By revenue, highest first. */
@@ -750,13 +760,10 @@ export interface CountryRevenueSummary {
 }
 
 /** The course's purchases in range, grouped by buyer country. */
-function getCountryRevenue(scope: CourseDetailScope): CountryRevenueSummary {
-  const conditions: SQL[] = [eq(purchases.courseId, scope.courseId)];
-  const cutoff = resolveCutoff({ instructorId: null, ...scope });
-  if (cutoff !== null) {
-    conditions.push(gte(purchases.createdAt, cutoff));
-  }
-
+function getCountryRevenue(
+  courseId: number,
+  cutoff: string | null
+): CountryRevenueSummary {
   const revenueExpr = sql<number>`sum(${purchases.amountPaid})`;
   const rows = db
     .select({
@@ -765,14 +772,30 @@ function getCountryRevenue(scope: CourseDetailScope): CountryRevenueSummary {
       revenueCents: revenueExpr,
     })
     .from(purchases)
-    .where(and(...conditions))
+    .where(
+      and(
+        eq(purchases.courseId, courseId),
+        scopeFilter(null, purchases.createdAt, cutoff)
+      )
+    )
     .groupBy(purchases.country)
     .orderBy(desc(revenueExpr), asc(purchases.country))
     .all();
 
+  // With PPP off, every buyer paid full price, whatever their country's tier.
+  const course = db
+    .select({ pppEnabled: courses.pppEnabled })
+    .from(courses)
+    .where(eq(courses.id, courseId))
+    .get();
+  const pppEnabled = course?.pppEnabled ?? false;
+
   const countries = rows.map((row): CountryRevenue => {
     if (row.country === null) {
       return { ...row, discountLabel: null, discounted: false };
+    }
+    if (!pppEnabled) {
+      return { ...row, discountLabel: PPP_TIERS[1].label, discounted: false };
     }
     const { tier, label } = getCountryTierInfo(row.country);
     return { ...row, discountLabel: label, discounted: tier > 1 };
@@ -796,15 +819,22 @@ function getCountryRevenue(scope: CourseDetailScope): CountryRevenueSummary {
  * progress, which has no start timestamp, so they are all time: the range
  * does not apply to them. Quiz pass rates and country revenue use the range.
  */
-export function getCourseDetail(scope: CourseDetailScope) {
-  const courseLessons = getCourseLessons(scope.courseId);
-  const enrolledCount = countEnrolled(scope.courseId);
-  const students = getStudentProgress(scope.courseId);
+export function getCourseDetail(
+  courseId: number,
+  range: AnalyticsRange,
+  now: Date = new Date()
+) {
+  const cutoff = resolveCutoff(range, now);
+  const courseLessons = getCourseLessons(courseId);
+  const enrolledCount = countEnrolled(courseId);
+  const students = getStudentProgress(courseId);
 
   return {
     progress: summariseProgress(students, enrolledCount, courseLessons.length),
     funnel: buildFunnel(courseLessons, students, enrolledCount),
-    quizPassRates: getQuizPassRates(scope),
-    countryRevenue: getCountryRevenue(scope),
+    quizPassRates: getQuizPassRates(courseId, cutoff),
+    countryRevenue: getCountryRevenue(courseId, cutoff),
   };
 }
+
+export type CourseDetail = ReturnType<typeof getCourseDetail>;

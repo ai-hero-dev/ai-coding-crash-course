@@ -43,13 +43,3 @@ export function parseIdParam(value: string | null): number | null {
   const id = Number(value);
   return id > 0 ? id : null;
 }
-
-const moneyFormat = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-});
-
-/** Integer cents as dollars. Unlike formatPrice, zero shows as "$0.00". */
-export function formatCents(cents: number): string {
-  return moneyFormat.format(cents / 100);
-}

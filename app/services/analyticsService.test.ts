@@ -129,11 +129,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 2500, daysBefore(2));
       createPurchase(otherCourse.id, 9900, daysBefore(1));
 
-      const overview = getOverview({
-        instructorId: base.instructor.id,
-        range: "all",
-        now: NOW,
-      });
+      const overview = getOverview(base.instructor.id, "all", NOW);
 
       expect(overview.revenue.grossCents).toBe(7500);
     });
@@ -144,11 +140,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 5000, daysBefore(1));
       createPurchase(otherCourse.id, 9900, daysBefore(1));
 
-      const overview = getOverview({
-        instructorId: null,
-        range: "all",
-        now: NOW,
-      });
+      const overview = getOverview(null, "all", NOW);
 
       expect(overview.revenue.grossCents).toBe(14900);
     });
@@ -156,11 +148,7 @@ describe("getOverview", () => {
     it("takes a 20% platform fee and leaves the rest as net", () => {
       createPurchase(base.course.id, 10000, daysBefore(1));
 
-      const { revenue } = getOverview({
-        instructorId: base.instructor.id,
-        range: "all",
-        now: NOW,
-      });
+      const { revenue } = getOverview(base.instructor.id, "all", NOW);
 
       expect(revenue).toEqual({
         grossCents: 10000,
@@ -173,11 +161,7 @@ describe("getOverview", () => {
       // 20% of 1003 is 200.6 → fee rounds to 201, net is the remainder.
       createPurchase(base.course.id, 1003, daysBefore(1));
 
-      const { revenue } = getOverview({
-        instructorId: base.instructor.id,
-        range: "all",
-        now: NOW,
-      });
+      const { revenue } = getOverview(base.instructor.id, "all", NOW);
 
       expect(revenue).toEqual({
         grossCents: 1003,
@@ -205,11 +189,7 @@ describe("getOverview", () => {
     ] as const)(
       "%s returns only purchases inside the range",
       (range, gross) => {
-        const { revenue } = getOverview({
-          instructorId: base.instructor.id,
-          range,
-          now: NOW,
-        });
+        const { revenue } = getOverview(base.instructor.id, range, NOW);
 
         expect(revenue.grossCents).toBe(gross);
       }
@@ -224,11 +204,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 700, "2026-06-10T10:00:00.000Z");
       createPurchase(base.course.id, 999, "2026-06-01T10:00:00.000Z"); // outside
 
-      const { revenueOverTime } = getOverview({
-        instructorId: base.instructor.id,
-        range: "7d",
-        now: NOW,
-      });
+      const { revenueOverTime } = getOverview(base.instructor.id, "7d", NOW);
 
       expect(revenueOverTime).toEqual([
         { period: "2026-06-08", grossCents: 0 },
@@ -247,11 +223,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 250, "2026-05-02T10:00:00.000Z");
       createPurchase(base.course.id, 50, "2026-05-30T10:00:00.000Z");
 
-      const { revenueOverTime } = getOverview({
-        instructorId: base.instructor.id,
-        range: "all",
-        now: NOW,
-      });
+      const { revenueOverTime } = getOverview(base.instructor.id, "all", NOW);
 
       expect(revenueOverTime).toEqual([
         { period: "2026-03", grossCents: 100 },
@@ -267,11 +239,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 300, "2026-06-14T09:00:00.000Z");
       createPurchase(otherCourse.id, 5000, "2026-06-14T09:00:00.000Z");
 
-      const { revenueOverTime } = getOverview({
-        instructorId: base.instructor.id,
-        range: "7d",
-        now: NOW,
-      });
+      const { revenueOverTime } = getOverview(base.instructor.id, "7d", NOW);
 
       expect(
         revenueOverTime.find((point) => point.period === "2026-06-14")
@@ -284,11 +252,7 @@ describe("getOverview", () => {
       const newcomer = createInstructor("Newcomer");
       createPurchase(base.course.id, 5000, daysBefore(1));
 
-      const overview = getOverview({
-        instructorId: newcomer.id,
-        range: "all",
-        now: NOW,
-      });
+      const overview = getOverview(newcomer.id, "all", NOW);
 
       expect(overview).toMatchObject({
         hasPublishedCourse: false,
@@ -300,11 +264,7 @@ describe("getOverview", () => {
     it("gives a dated range a zero for each day", () => {
       const newcomer = createInstructor("Newcomer");
 
-      const { revenueOverTime } = getOverview({
-        instructorId: newcomer.id,
-        range: "7d",
-        now: NOW,
-      });
+      const { revenueOverTime } = getOverview(newcomer.id, "7d", NOW);
 
       expect(revenueOverTime).toHaveLength(8);
       expect(revenueOverTime.every((p) => p.grossCents === 0)).toBe(true);
@@ -313,11 +273,7 @@ describe("getOverview", () => {
 
   describe("hasPublishedCourse", () => {
     it("is true when the instructor has a published course", () => {
-      const overview = getOverview({
-        instructorId: base.instructor.id,
-        range: "all",
-        now: NOW,
-      });
+      const overview = getOverview(base.instructor.id, "all", NOW);
 
       expect(overview.hasPublishedCourse).toBe(true);
     });
@@ -326,11 +282,7 @@ describe("getOverview", () => {
       const drafter = createInstructor("Drafter");
       createCourse(drafter.id, schema.CourseStatus.Draft);
 
-      const overview = getOverview({
-        instructorId: drafter.id,
-        range: "all",
-        now: NOW,
-      });
+      const overview = getOverview(drafter.id, "all", NOW);
 
       expect(overview.hasPublishedCourse).toBe(false);
     });
@@ -341,11 +293,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 60000, daysBefore(30));
       createPurchase(base.course.id, 10000, daysBefore(5));
 
-      const { revenue } = getOverview({
-        instructorId: base.instructor.id,
-        range: "30d",
-        now: NOW,
-      });
+      const { revenue } = getOverview(base.instructor.id, "30d", NOW);
 
       expect(revenue.grossCents).toBe(70000);
     });
@@ -357,11 +305,7 @@ describe("getOverview", () => {
       createPurchase(base.course.id, 60000, justBefore);
       createPurchase(base.course.id, 10000, daysBefore(5));
 
-      const { revenue } = getOverview({
-        instructorId: base.instructor.id,
-        range: "30d",
-        now: NOW,
-      });
+      const { revenue } = getOverview(base.instructor.id, "30d", NOW);
 
       expect(revenue.grossCents).toBe(10000);
     });
@@ -468,11 +412,7 @@ describe("getOverview audience", () => {
     redeem(team.coupons[0], ann.id, daysBefore(1));
     redeem(team.coupons[1], bob.id, daysBefore(1));
 
-    const { audience } = getOverview({
-      instructorId: base.instructor.id,
-      range: "all",
-      now: NOW,
-    });
+    const { audience } = getOverview(base.instructor.id, "all", NOW);
 
     // Buyers: Solo and Manager. Students: Solo, Ann and Bob.
     expect(audience.buyers).toBe(2);
@@ -495,11 +435,7 @@ describe("getOverview audience", () => {
     redeem(team.coupons[0], ann.id, daysBefore(1));
     redeem(team.coupons[1], bob.id, daysBefore(1));
 
-    const { audience } = getOverview({
-      instructorId: base.instructor.id,
-      range: "all",
-      now: NOW,
-    });
+    const { audience } = getOverview(base.instructor.id, "all", NOW);
 
     // Solo $50 + Ann $100 + Bob $100 = $250 over 3 students. The unredeemed
     // third seat belongs to no student.
@@ -511,11 +447,7 @@ describe("getOverview audience", () => {
     const freeloader = createStudent("Freeloader");
     enroll(freeloader.id, base.course.id, daysBefore(1));
 
-    const { audience } = getOverview({
-      instructorId: base.instructor.id,
-      range: "all",
-      now: NOW,
-    });
+    const { audience } = getOverview(base.instructor.id, "all", NOW);
 
     expect(audience).toMatchObject({
       students: 1,
@@ -538,11 +470,7 @@ describe("getOverview topBuyers", () => {
     // Buyer 1 also spends $20 on the second course: $21 in total, the top.
     buyAndEnroll(buyers[0].id, secondCourse.id, 2000, daysBefore(3));
 
-    const { topBuyers } = getOverview({
-      instructorId: base.instructor.id,
-      range: "all",
-      now: NOW,
-    });
+    const { topBuyers } = getOverview(base.instructor.id, "all", NOW);
 
     expect(
       topBuyers.map((buyer) => [buyer.name, buyer.totalSpentCents])
@@ -575,11 +503,7 @@ describe("getOverview topBuyers", () => {
     redeem(team.coupons[0], ann.id, daysBefore(1));
     redeem(team.coupons[1], solo.id, daysBefore(1));
 
-    const { topBuyers } = getOverview({
-      instructorId: base.instructor.id,
-      range: "all",
-      now: NOW,
-    });
+    const { topBuyers } = getOverview(base.instructor.id, "all", NOW);
 
     expect(topBuyers).toEqual([
       {
@@ -613,11 +537,7 @@ describe("getOverview topBuyers", () => {
     buyAndEnroll(buyer.id, base.course.id, 7000, daysBefore(60));
     buyAndEnroll(buyer.id, otherCourse.id, 9000, daysBefore(3));
 
-    const { topBuyers } = getOverview({
-      instructorId: base.instructor.id,
-      range: "30d",
-      now: NOW,
-    });
+    const { topBuyers } = getOverview(base.instructor.id, "30d", NOW);
 
     expect(topBuyers.map((row) => row.totalSpentCents)).toEqual([1000]);
   });
@@ -634,11 +554,7 @@ describe("getOverview seats", () => {
     buyTeamSeats(m2.id, base.course.id, 20000, 2, daysBefore(4));
     redeem(first.coupons[2], ann.id, daysBefore(1));
 
-    const { seats } = getOverview({
-      instructorId: base.instructor.id,
-      range: "all",
-      now: NOW,
-    });
+    const { seats } = getOverview(base.instructor.id, "all", NOW);
 
     expect(seats).toEqual({ sold: 5, unredeemed: 4 });
   });
@@ -671,19 +587,19 @@ function ask(
 }
 
 describe("getOverview unansweredQuestions", () => {
-  it("counts open questions asked in range on the instructor's courses", () => {
+  it("counts open questions on the instructor's courses over all time, whatever the range", () => {
     const lesson = createLesson(base.course.id);
     const otherLesson = createLesson(createCourse(createInstructor().id).id);
     ask(lesson.id, base.user.id, daysBefore(2)); // open, in range
-    ask(lesson.id, base.user.id, daysBefore(60)); // open, out of 30d range
+    ask(lesson.id, base.user.id, daysBefore(60)); // open, older than 30d
     const answered = ask(lesson.id, base.user.id, daysBefore(3));
     ask(lesson.id, base.instructor.id, daysBefore(1), answered.id);
     ask(otherLesson.id, base.user.id, daysBefore(2)); // another instructor's
 
-    const scope = { instructorId: base.instructor.id, now: NOW };
+    const instructorId = base.instructor.id;
 
-    expect(getOverview({ ...scope, range: "30d" }).unansweredQuestions).toBe(1);
-    expect(getOverview({ ...scope, range: "all" }).unansweredQuestions).toBe(2);
+    expect(getOverview(instructorId, "30d", NOW).unansweredQuestions).toBe(2);
+    expect(getOverview(instructorId, "all", NOW).unansweredQuestions).toBe(2);
   });
 });
 
@@ -712,11 +628,7 @@ describe("getOverview ratings", () => {
     rate(base.course.id, 1, daysBefore(60)); // outside 30d
     rate(otherCourse.id, 1, daysBefore(1)); // another instructor's
 
-    const { ratings } = getOverview({
-      instructorId: base.instructor.id,
-      range: "30d",
-      now: NOW,
-    });
+    const { ratings } = getOverview(base.instructor.id, "30d", NOW);
 
     // 13 stars over 3 ratings = 4.33 → 4.3. Drafts cannot be rated: left out.
     expect(ratings).toEqual({
@@ -739,11 +651,7 @@ describe("getOverview for an instructor with no data", () => {
   it("returns empty panels rather than throwing or NaN", () => {
     const newcomer = createInstructor("Newcomer");
 
-    const overview = getOverview({
-      instructorId: newcomer.id,
-      range: "all",
-      now: NOW,
-    });
+    const overview = getOverview(newcomer.id, "all", NOW);
 
     expect(overview).toMatchObject({
       audience: {
