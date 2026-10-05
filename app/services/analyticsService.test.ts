@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
+import { eq } from "drizzle-orm";
 
 let testDb: ReturnType<typeof createTestDb>;
 let base: ReturnType<typeof seedBaseData>;
@@ -363,6 +364,398 @@ describe("getOverview", () => {
       });
 
       expect(revenue.grossCents).toBe(10000);
+    });
+  });
+});
+
+// ─── Overview: buyers, students, leaderboard, questions, ratings ───
+
+function createStudent(name: string) {
+  counter++;
+  return testDb
+    .insert(schema.users)
+    .values({
+      name,
+      email: `student-${counter}@example.com`,
+      role: schema.UserRole.Student,
+    })
+    .returning()
+    .get();
+}
+
+function enroll(userId: number, courseId: number, enrolledAt: string) {
+  testDb
+    .insert(schema.enrollments)
+    .values({ userId, courseId, enrolledAt })
+    .run();
+}
+
+/** An individual purchase: the buyer pays for one seat and enrols. */
+function buyAndEnroll(
+  userId: number,
+  courseId: number,
+  amountPaid: number,
+  createdAt: string
+) {
+  testDb
+    .insert(schema.purchases)
+    .values({ userId, courseId, amountPaid, country: "US", createdAt })
+    .run();
+  enroll(userId, courseId, createdAt);
+}
+
+/**
+ * A team purchase: one purchase row, one coupon per seat. The buyer is not
+ * enrolled.
+ */
+function buyTeamSeats(
+  buyerId: number,
+  courseId: number,
+  amountPaid: number,
+  seats: number,
+  createdAt: string
+) {
+  const team = testDb.insert(schema.teams).values({}).returning().get();
+  const purchase = testDb
+    .insert(schema.purchases)
+    .values({ userId: buyerId, courseId, amountPaid, country: "US", createdAt })
+    .returning()
+    .get();
+  const coupons = Array.from({ length: seats }, () => {
+    counter++;
+    return testDb
+      .insert(schema.coupons)
+      .values({
+        teamId: team.id,
+        courseId,
+        code: `SEAT-${counter}`,
+        purchaseId: purchase.id,
+        createdAt,
+      })
+      .returning()
+      .get();
+  });
+  return { purchase, coupons };
+}
+
+/** Redeems a seat coupon: the redeemer enrols, with no purchase row. */
+function redeem(
+  coupon: typeof schema.coupons.$inferSelect,
+  userId: number,
+  at: string
+) {
+  testDb
+    .update(schema.coupons)
+    .set({ redeemedByUserId: userId, redeemedAt: at })
+    .where(eq(schema.coupons.id, coupon.id))
+    .run();
+  enroll(userId, coupon.courseId, at);
+}
+
+describe("getOverview audience", () => {
+  it("counts buyers and enrolled students separately when teams buy seats", () => {
+    const solo = createStudent("Solo");
+    const manager = createStudent("Manager");
+    const [ann, bob] = [createStudent("Ann"), createStudent("Bob")];
+    buyAndEnroll(solo.id, base.course.id, 5000, daysBefore(2));
+    const team = buyTeamSeats(
+      manager.id,
+      base.course.id,
+      30000,
+      3,
+      daysBefore(2)
+    );
+    redeem(team.coupons[0], ann.id, daysBefore(1));
+    redeem(team.coupons[1], bob.id, daysBefore(1));
+
+    const { audience } = getOverview({
+      instructorId: base.instructor.id,
+      range: "all",
+      now: NOW,
+    });
+
+    // Buyers: Solo and Manager. Students: Solo, Ann and Bob.
+    expect(audience.buyers).toBe(2);
+    expect(audience.students).toBe(3);
+  });
+
+  it("traces a seat redeemer's revenue back to the team purchase that minted the seat", () => {
+    const solo = createStudent("Solo");
+    const manager = createStudent("Manager");
+    const [ann, bob] = [createStudent("Ann"), createStudent("Bob")];
+    buyAndEnroll(solo.id, base.course.id, 5000, daysBefore(2));
+    // 3 seats for $300: each seat is worth $100.
+    const team = buyTeamSeats(
+      manager.id,
+      base.course.id,
+      30000,
+      3,
+      daysBefore(2)
+    );
+    redeem(team.coupons[0], ann.id, daysBefore(1));
+    redeem(team.coupons[1], bob.id, daysBefore(1));
+
+    const { audience } = getOverview({
+      instructorId: base.instructor.id,
+      range: "all",
+      now: NOW,
+    });
+
+    // Solo $50 + Ann $100 + Bob $100 = $250 over 3 students. The unredeemed
+    // third seat belongs to no student.
+    expect(audience.studentRevenueCents).toBe(25000);
+    expect(audience.revenuePerStudentCents).toBe(8333);
+  });
+
+  it("gives a student who enrolled free no revenue", () => {
+    const freeloader = createStudent("Freeloader");
+    enroll(freeloader.id, base.course.id, daysBefore(1));
+
+    const { audience } = getOverview({
+      instructorId: base.instructor.id,
+      range: "all",
+      now: NOW,
+    });
+
+    expect(audience).toMatchObject({
+      students: 1,
+      studentRevenueCents: 0,
+      revenuePerStudentCents: 0,
+    });
+  });
+});
+
+describe("getOverview topBuyers", () => {
+  it("ranks buyers by total spend across the instructor's courses, top ten only", () => {
+    const secondCourse = createCourse(base.instructor.id);
+    const buyers = Array.from({ length: 12 }, (_, i) =>
+      createStudent(`Buyer ${i + 1}`)
+    );
+    // Buyer n spends n dollars on the main course.
+    buyers.forEach((buyer, i) =>
+      buyAndEnroll(buyer.id, base.course.id, (i + 1) * 100, daysBefore(3))
+    );
+    // Buyer 1 also spends $20 on the second course: $21 in total, the top.
+    buyAndEnroll(buyers[0].id, secondCourse.id, 2000, daysBefore(3));
+
+    const { topBuyers } = getOverview({
+      instructorId: base.instructor.id,
+      range: "all",
+      now: NOW,
+    });
+
+    expect(
+      topBuyers.map((buyer) => [buyer.name, buyer.totalSpentCents])
+    ).toEqual([
+      ["Buyer 1", 2100],
+      ["Buyer 12", 1200],
+      ["Buyer 11", 1100],
+      ["Buyer 10", 1000],
+      ["Buyer 9", 900],
+      ["Buyer 8", 800],
+      ["Buyer 7", 700],
+      ["Buyer 6", 600],
+      ["Buyer 5", 500],
+      ["Buyer 4", 400],
+    ]);
+  });
+
+  it("flags a team buyer who never enrolled, with seats bought and seats unused", () => {
+    const manager = createStudent("Manager");
+    const solo = createStudent("Solo");
+    const ann = createStudent("Ann");
+    buyAndEnroll(solo.id, base.course.id, 5000, daysBefore(2));
+    const team = buyTeamSeats(
+      manager.id,
+      base.course.id,
+      50000,
+      5,
+      daysBefore(2)
+    );
+    redeem(team.coupons[0], ann.id, daysBefore(1));
+    redeem(team.coupons[1], solo.id, daysBefore(1));
+
+    const { topBuyers } = getOverview({
+      instructorId: base.instructor.id,
+      range: "all",
+      now: NOW,
+    });
+
+    expect(topBuyers).toEqual([
+      {
+        userId: manager.id,
+        name: "Manager",
+        email: manager.email,
+        totalSpentCents: 50000,
+        isTeamBuyer: true,
+        seats: 5,
+        unredeemedSeats: 3,
+        enrolled: false,
+      },
+      {
+        userId: solo.id,
+        name: "Solo",
+        email: solo.email,
+        totalSpentCents: 5000,
+        isTeamBuyer: false,
+        seats: 0,
+        unredeemedSeats: 0,
+        enrolled: true,
+      },
+    ]);
+  });
+
+  it("only counts purchases inside the range and the instructor's scope", () => {
+    const other = createInstructor();
+    const otherCourse = createCourse(other.id);
+    const buyer = createStudent("Buyer");
+    buyAndEnroll(buyer.id, base.course.id, 1000, daysBefore(3));
+    buyAndEnroll(buyer.id, base.course.id, 7000, daysBefore(60));
+    buyAndEnroll(buyer.id, otherCourse.id, 9000, daysBefore(3));
+
+    const { topBuyers } = getOverview({
+      instructorId: base.instructor.id,
+      range: "30d",
+      now: NOW,
+    });
+
+    expect(topBuyers.map((row) => row.totalSpentCents)).toEqual([1000]);
+  });
+});
+
+describe("getOverview seats", () => {
+  it("counts team seats sold and the ones never redeemed", () => {
+    const [m1, m2, ann] = [
+      createStudent("M1"),
+      createStudent("M2"),
+      createStudent("Ann"),
+    ];
+    const first = buyTeamSeats(m1.id, base.course.id, 30000, 3, daysBefore(4));
+    buyTeamSeats(m2.id, base.course.id, 20000, 2, daysBefore(4));
+    redeem(first.coupons[2], ann.id, daysBefore(1));
+
+    const { seats } = getOverview({
+      instructorId: base.instructor.id,
+      range: "all",
+      now: NOW,
+    });
+
+    expect(seats).toEqual({ sold: 5, unredeemed: 4 });
+  });
+});
+
+function createLesson(courseId: number) {
+  const module = testDb
+    .insert(schema.modules)
+    .values({ courseId, title: "Module", position: 1 })
+    .returning()
+    .get();
+  return testDb
+    .insert(schema.lessons)
+    .values({ moduleId: module.id, title: "Lesson", position: 1 })
+    .returning()
+    .get();
+}
+
+function ask(
+  lessonId: number,
+  userId: number,
+  createdAt: string,
+  parentId: number | null = null
+) {
+  return testDb
+    .insert(schema.comments)
+    .values({ lessonId, userId, body: "Question?", createdAt, parentId })
+    .returning()
+    .get();
+}
+
+describe("getOverview unansweredQuestions", () => {
+  it("counts open questions asked in range on the instructor's courses", () => {
+    const lesson = createLesson(base.course.id);
+    const otherLesson = createLesson(createCourse(createInstructor().id).id);
+    ask(lesson.id, base.user.id, daysBefore(2)); // open, in range
+    ask(lesson.id, base.user.id, daysBefore(60)); // open, out of 30d range
+    const answered = ask(lesson.id, base.user.id, daysBefore(3));
+    ask(lesson.id, base.instructor.id, daysBefore(1), answered.id);
+    ask(otherLesson.id, base.user.id, daysBefore(2)); // another instructor's
+
+    const scope = { instructorId: base.instructor.id, now: NOW };
+
+    expect(getOverview({ ...scope, range: "30d" }).unansweredQuestions).toBe(1);
+    expect(getOverview({ ...scope, range: "all" }).unansweredQuestions).toBe(2);
+  });
+});
+
+function rate(courseId: number, rating: number, at: string) {
+  const rater = createStudent("Rater");
+  testDb
+    .insert(schema.courseRatings)
+    .values({
+      userId: rater.id,
+      courseId,
+      rating,
+      createdAt: at,
+      updatedAt: at,
+    })
+    .run();
+}
+
+describe("getOverview ratings", () => {
+  it("averages ratings given in range, per course and overall", () => {
+    const unrated = createCourse(base.instructor.id);
+    createCourse(base.instructor.id, schema.CourseStatus.Draft);
+    const otherCourse = createCourse(createInstructor().id);
+    rate(base.course.id, 5, daysBefore(1));
+    rate(base.course.id, 4, daysBefore(2));
+    rate(base.course.id, 4, daysBefore(3));
+    rate(base.course.id, 1, daysBefore(60)); // outside 30d
+    rate(otherCourse.id, 1, daysBefore(1)); // another instructor's
+
+    const { ratings } = getOverview({
+      instructorId: base.instructor.id,
+      range: "30d",
+      now: NOW,
+    });
+
+    // 13 stars over 3 ratings = 4.33 → 4.3. Drafts cannot be rated: left out.
+    expect(ratings).toEqual({
+      average: 4.3,
+      count: 3,
+      courses: [
+        { courseId: unrated.id, title: unrated.title, average: null, count: 0 },
+        {
+          courseId: base.course.id,
+          title: "Test Course",
+          average: 4.3,
+          count: 3,
+        },
+      ],
+    });
+  });
+});
+
+describe("getOverview for an instructor with no data", () => {
+  it("returns empty panels rather than throwing or NaN", () => {
+    const newcomer = createInstructor("Newcomer");
+
+    const overview = getOverview({
+      instructorId: newcomer.id,
+      range: "all",
+      now: NOW,
+    });
+
+    expect(overview).toMatchObject({
+      audience: {
+        buyers: 0,
+        students: 0,
+        studentRevenueCents: 0,
+        revenuePerStudentCents: 0,
+      },
+      topBuyers: [],
+      seats: { sold: 0, unredeemed: 0 },
+      unansweredQuestions: 0,
+      ratings: { average: null, count: 0, courses: [] },
     });
   });
 });
