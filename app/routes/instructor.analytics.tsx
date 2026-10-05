@@ -8,9 +8,12 @@ import {
   getAnalyticsCourses,
   getCourseDetail,
   getOverview,
+  type CountryRevenueSummary,
   type Funnel,
+  type QuizPassRate,
   type RevenuePoint,
 } from "~/services/analyticsService";
+import { COUNTRIES } from "~/lib/ppp";
 import {
   ANALYTICS_RANGES,
   ANALYTICS_RANGE_LABELS,
@@ -677,6 +680,14 @@ function CourseDetailTab({ data }: { data: LoaderData }) {
               <DropOffFunnel funnel={data.courseDetail.funnel} />
             </>
           )}
+          <QuizPassRates
+            quizzes={data.courseDetail.quizPassRates}
+            range={data.range}
+          />
+          <RevenueByCountry
+            revenue={data.courseDetail.countryRevenue}
+            range={data.range}
+          />
         </>
       )}
     </div>
@@ -847,6 +858,204 @@ function DropOffFunnel({ funnel }: { funnel: Funnel }) {
               </section>
             ))}
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * One row per quiz in course order. A rate counts each student once, by their
+ * best attempt, so retakes do not drag it down.
+ */
+function QuizPassRates({
+  quizzes,
+  range,
+}: {
+  quizzes: QuizPassRate[];
+  range: AnalyticsRange;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Quiz pass rates</CardTitle>
+        <CardDescription>
+          Each student counts once per quiz, by their best attempt (highest
+          score). Attempts made {ANALYTICS_RANGE_LABELS[range].toLowerCase()}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className={quizzes.length === 0 ? undefined : "p-0"}>
+        {quizzes.length === 0 ? (
+          <PanelEmpty
+            title="This course has no quizzes"
+            body="Add a quiz to a lesson to see how students do on it. Most lessons have none, and that is fine."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-y border-border bg-muted/50">
+                  <th className={tableHeadClass}>Quiz</th>
+                  <th className={tableHeadClass}>Pass rate</th>
+                  <th className={`${tableHeadClass} text-right`}>Passed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quizzes.map((quiz) => (
+                  <tr
+                    key={quiz.quizId}
+                    className="border-b border-border last:border-0"
+                  >
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{quiz.title}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {quiz.lessonTitle}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {quiz.passRatePercent === null ? (
+                        <span className="text-sm text-muted-foreground">
+                          No attempts in this period
+                        </span>
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <div className="w-32">
+                            <ProgressBar percent={quiz.passRatePercent} />
+                          </div>
+                          <span className="text-sm font-medium tabular-nums">
+                            {quiz.passRatePercent}%
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm tabular-nums">
+                      {quiz.passedCount} of {quiz.studentCount}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const countryNames = new Map(COUNTRIES.map(({ code, name }) => [code, name]));
+
+function countryName(code: string | null): string {
+  if (code === null) return "Unknown";
+  return countryNames.get(code) ?? code;
+}
+
+/**
+ * Where the course's money comes from. The discount a buyer got is not
+ * stored, so each country shows its current PPP tier, not a reconstructed
+ * discount.
+ */
+function RevenueByCountry({
+  revenue,
+  range,
+}: {
+  revenue: CountryRevenueSummary;
+  range: AnalyticsRange;
+}) {
+  const period = ANALYTICS_RANGE_LABELS[range].toLowerCase();
+  const discountedPercent =
+    revenue.totalCents === 0
+      ? 0
+      : Math.round((revenue.discountedCents / revenue.totalCents) * 100);
+  const percentOf = (cents: number) =>
+    revenue.totalCents === 0 ? 0 : (cents / revenue.totalCents) * 100;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Revenue by country</CardTitle>
+        <CardDescription>
+          This course's purchases by buyer country, {period}. A team purchase
+          counts once, at its full amount.
+        </CardDescription>
+      </CardHeader>
+      <CardContent
+        className={revenue.countries.length === 0 ? undefined : "p-0"}
+      >
+        {revenue.countries.length === 0 ? (
+          <PanelEmpty
+            title="No sales in this period"
+            body="Buyer countries appear here once people buy this course. Try a longer range."
+          />
+        ) : (
+          <>
+            <div className="space-y-2 px-6 pb-4">
+              <p className="text-sm">
+                <span className="font-semibold tabular-nums">
+                  {formatCents(revenue.discountedCents)}
+                </span>{" "}
+                of {formatCents(revenue.totalCents)} ({discountedPercent}%) came
+                from regions with a purchasing-power discount.
+              </p>
+              <ProgressBar percent={discountedPercent} />
+              <p className="text-xs text-muted-foreground">
+                The discount column is each country's current tier. The discount
+                a buyer actually got is not recorded.
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-y border-border bg-muted/50">
+                    <th className={tableHeadClass}>Country</th>
+                    <th className={tableHeadClass}>Discount tier</th>
+                    <th className={`${tableHeadClass} text-right`}>
+                      Purchases
+                    </th>
+                    <th className={tableHeadClass}>Share</th>
+                    <th className={`${tableHeadClass} text-right`}>Revenue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {revenue.countries.map((row) => (
+                    <tr
+                      key={row.country ?? "unknown"}
+                      className="border-b border-border last:border-0"
+                    >
+                      <td className="px-4 py-3 font-medium">
+                        {countryName(row.country)}
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        {row.discountLabel === null ? (
+                          <span className="text-muted-foreground">
+                            No country recorded
+                          </span>
+                        ) : row.discounted ? (
+                          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                            {row.discountLabel}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {row.discountLabel}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right text-sm tabular-nums">
+                        {row.purchaseCount}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="w-32">
+                          <ProgressBar percent={percentOf(row.revenueCents)} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium tabular-nums">
+                        {formatCents(row.revenueCents)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </CardContent>
     </Card>
