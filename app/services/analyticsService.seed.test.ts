@@ -35,7 +35,7 @@ function funnelFor(courseTitle: string) {
     .where(eq(schema.courses.title, courseTitle))
     .get();
   if (!course) throw new Error(`No seeded course "${courseTitle}"`);
-  const { funnel } = getCourseDetail({ courseId: course.id, range: "all" });
+  const { funnel } = getCourseDetail(course.id, "all");
   const lessons = funnel.modules.flatMap((mod) => mod.lessons);
   return { funnel, lessons };
 }
