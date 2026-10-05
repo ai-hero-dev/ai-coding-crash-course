@@ -6,7 +6,9 @@ import { UserRole } from "~/db/schema";
 import { getUsersByRole } from "~/services/userService";
 import {
   getAnalyticsCourses,
+  getCourseDetail,
   getOverview,
+  type Funnel,
   type RevenuePoint,
 } from "~/services/analyticsService";
 import {
@@ -42,7 +44,7 @@ import {
 } from "~/components/ui/select";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { AlertTriangle, BarChart3, BookOpen, Star } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, Star, Users } from "lucide-react";
 
 // ─── Instructor Analytics ───
 // One page that answers "how is my teaching business doing". All page state
@@ -91,6 +93,10 @@ export async function loader({ request, url }: Route.LoaderArgs) {
     courses,
     selectedCourse,
     overview: getOverview({ instructorId, range }),
+    courseDetail:
+      tab === "course" && selectedCourse
+        ? getCourseDetail({ courseId: selectedCourse.id, range })
+        : null,
   };
 }
 
@@ -661,13 +667,189 @@ function CourseDetailTab({ data }: { data: LoaderData }) {
         courses={data.courses}
         selectedCourse={data.selectedCourse}
       />
+      {data.courseDetail && (
+        <>
+          {data.courseDetail.progress.enrolledCount === 0 ? (
+            <NoEnrolledStudents />
+          ) : (
+            <>
+              <ProgressFigures progress={data.courseDetail.progress} />
+              <DropOffFunnel funnel={data.courseDetail.funnel} />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+const ALL_TIME_NOTE = "All time: lesson progress has no start date.";
+
+function NoEnrolledStudents() {
+  return (
+    <Card>
+      <CardContent className="py-12 text-center">
+        <Users className="mx-auto mb-4 size-12 text-muted-foreground/50" />
+        <p className="font-medium">No students enrolled yet</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Progress and lesson drop-off appear here once students enrol in this
+          course.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProgressBar({ percent }: { percent: number }) {
+  return (
+    <div className="h-2 w-full rounded-full bg-muted">
+      <div
+        className="h-2 rounded-full bg-primary transition-all"
+        style={{ width: `${percent}%` }}
+      />
+    </div>
+  );
+}
+
+function ProgressFigures({
+  progress,
+}: {
+  progress: NonNullable<LoaderData["courseDetail"]>["progress"];
+}) {
+  const finishedPercent =
+    progress.enrolledCount === 0
+      ? 0
+      : Math.round((progress.finishedCount / progress.enrolledCount) * 100);
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
       <Card>
-        <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          Lesson drop-off, student progress, quiz pass rates and revenue by
-          country for {data.selectedCourse.title} will appear here.
+        <CardHeader>
+          <CardDescription>Average progress</CardDescription>
+          <CardTitle className="text-3xl tabular-nums">
+            {progress.averageProgressPercent}%
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-xs text-muted-foreground">
+          <ProgressBar percent={progress.averageProgressPercent} />
+          <p>
+            Lessons completed over total lessons, averaged over{" "}
+            {progress.enrolledCount} enrolled students. {ALL_TIME_NOTE}
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardDescription>Finished the course</CardDescription>
+          <CardTitle className="text-3xl tabular-nums">
+            {progress.finishedCount}{" "}
+            <span className="text-base font-normal text-muted-foreground">
+              of {progress.enrolledCount}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-xs text-muted-foreground">
+          <ProgressBar percent={finishedPercent} />
+          <p>Students who completed every lesson. {ALL_TIME_NOTE}</p>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function DropCount({
+  count,
+  isBiggest,
+}: {
+  count: number;
+  isBiggest: boolean;
+}) {
+  if (count === 0) {
+    return <span className="text-muted-foreground/50">—</span>;
+  }
+  return (
+    <span
+      className={
+        isBiggest
+          ? "font-semibold text-red-600 dark:text-red-400"
+          : "text-muted-foreground"
+      }
+    >
+      −{count}
+    </span>
+  );
+}
+
+/**
+ * One bar per lesson: students who reached at least that lesson, of everyone
+ * enrolled. The series only descends, so the widest gap is where students
+ * quit.
+ */
+function DropOffFunnel({ funnel }: { funnel: Funnel }) {
+  const lessons = funnel.modules.flatMap((mod) => mod.lessons);
+  const biggestDrop = Math.max(0, ...lessons.map((lesson) => lesson.dropCount));
+  const percentOf = (count: number) =>
+    funnel.enrolledCount === 0 ? 0 : (count / funnel.enrolledCount) * 100;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Lesson drop-off</CardTitle>
+        <CardDescription>
+          Students who reached at least each lesson, of {funnel.enrolledCount}{" "}
+          enrolled. A skipped lesson is not a drop. The number on the right is
+          how many students stopped before the lesson. {ALL_TIME_NOTE}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {lessons.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            This course has no lessons yet.
+          </p>
+        ) : (
+          <div className="space-y-6">
+            {funnel.modules.map((mod) => (
+              <section key={mod.id} aria-label={mod.title}>
+                <div className="mb-2 flex items-baseline justify-between gap-4 border-b border-border pb-1">
+                  <h3 className="text-sm font-semibold">{mod.title}</h3>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {mod.reachedCount} reached · {mod.dropCount} lost
+                  </p>
+                </div>
+                <ol className="space-y-1.5">
+                  {mod.lessons.map((lesson) => (
+                    <li
+                      key={lesson.id}
+                      className="grid grid-cols-[minmax(0,14rem)_1fr_3rem_3rem] items-center gap-3 text-sm"
+                    >
+                      <span className="truncate" title={lesson.title}>
+                        {lesson.title}
+                      </span>
+                      <div className="h-2 w-full rounded-full bg-muted">
+                        <div
+                          className="h-2 rounded-full bg-primary transition-all"
+                          style={{
+                            width: `${percentOf(lesson.reachedCount)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-right tabular-nums">
+                        {lesson.reachedCount}
+                      </span>
+                      <span className="text-right text-xs tabular-nums">
+                        <DropCount
+                          count={lesson.dropCount}
+                          isBiggest={lesson.dropCount === biggestDrop}
+                        />
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
