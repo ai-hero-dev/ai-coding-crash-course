@@ -1,9 +1,10 @@
 {
   "name": "cadence-course-platform",
   "private": true,
-  "description": "An awesome horse platform",
+  "description": "An awesome course platform",
   "type": "module",
   "scripts": {
+    "foobar": "echo 'foobar'",
     "cherry-pick": "ai-hero-cli cherry-pick --branch=live-run-through --upstream=https://github.com/ai-hero-dev/ai-coding-crash-course.git",
     "reset": "ai-hero-cli reset --branch=live-run-through --upstream=https://github.com/ai-hero-dev/ai-coding-crash-course.git",
     "pull": "ai-hero-cli pull --upstream=https://github.com/ai-hero-dev/ai-coding-crash-course.git",
