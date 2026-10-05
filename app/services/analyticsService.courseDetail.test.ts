@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
 
@@ -100,7 +101,7 @@ function enrolledStudent(completedLessonIds: number[]) {
 }
 
 function getDetail() {
-  return getCourseDetail({ courseId: base.course.id, range: "all" });
+  return getCourseDetail(base.course.id, "all");
 }
 
 beforeEach(() => {
@@ -303,11 +304,11 @@ describe("getCourseDetail: quiz pass rates", () => {
     attempt(student.id, early.id, 1, "2026-05-15T11:59:59.000Z");
     attempt(student.id, early.id, 0.2, "2026-06-14T12:00:00.000Z");
 
-    const { quizPassRates } = getCourseDetail({
-      courseId: base.course.id,
-      range: "30d",
-      now: new Date("2026-06-15T12:00:00.000Z"),
-    });
+    const { quizPassRates } = getCourseDetail(
+      base.course.id,
+      "30d",
+      new Date("2026-06-15T12:00:00.000Z")
+    );
 
     expect(
       quizPassRates.map((quiz) => [
@@ -410,14 +411,44 @@ describe("getCourseDetail: revenue by country", () => {
     purchase("US", 200, "2026-05-16T11:59:59.999Z"); // just outside
     purchase("US", 400, "2026-06-15T12:00:00.000Z", other.id);
 
-    const { countryRevenue } = getCourseDetail({
-      courseId: base.course.id,
-      range: "30d",
-      now: new Date("2026-06-15T12:00:00.000Z"),
-    });
+    const { countryRevenue } = getCourseDetail(
+      base.course.id,
+      "30d",
+      new Date("2026-06-15T12:00:00.000Z")
+    );
 
     expect(countryRevenue.totalCents).toBe(100);
     expect(countryRevenue.purchaseCount).toBe(1);
+  });
+
+  it("shows no discount for any country when the course has PPP turned off", () => {
+    testDb
+      .update(schema.courses)
+      .set({ pppEnabled: false })
+      .where(eq(schema.courses.id, base.course.id))
+      .run();
+    purchase("IN", 10000);
+    purchase("US", 10000);
+
+    const { countryRevenue } = getDetail();
+
+    expect(countryRevenue.discountedCents).toBe(0);
+    expect(countryRevenue.countries).toEqual([
+      {
+        country: "IN",
+        purchaseCount: 1,
+        revenueCents: 10000,
+        discountLabel: "Full Price",
+        discounted: false,
+      },
+      {
+        country: "US",
+        purchaseCount: 1,
+        revenueCents: 10000,
+        discountLabel: "Full Price",
+        discounted: false,
+      },
+    ]);
   });
 
   it("returns zeros and no countries for a course with no sales", () => {
