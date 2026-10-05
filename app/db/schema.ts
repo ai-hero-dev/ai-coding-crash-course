@@ -112,31 +112,41 @@ export const lessons = sqliteTable("lessons", {
     .$defaultFn(() => new Date().toISOString()),
 });
 
-export const enrollments = sqliteTable("enrollments", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => users.id),
-  courseId: integer("course_id")
-    .notNull()
-    .references(() => courses.id),
-  enrolledAt: text("enrolled_at")
-    .notNull()
-    .$defaultFn(() => new Date().toISOString()),
-  completedAt: text("completed_at"),
-});
+export const enrollments = sqliteTable(
+  "enrollments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    courseId: integer("course_id")
+      .notNull()
+      .references(() => courses.id),
+    enrolledAt: text("enrolled_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    completedAt: text("completed_at"),
+  },
+  (table) => [index("enrollments_course_idx").on(table.courseId)]
+);
 
-export const lessonProgress = sqliteTable("lesson_progress", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => users.id),
-  lessonId: integer("lesson_id")
-    .notNull()
-    .references(() => lessons.id),
-  status: text("status").notNull().$type<LessonProgressStatus>(),
-  completedAt: text("completed_at"),
-});
+export const lessonProgress = sqliteTable(
+  "lesson_progress",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    lessonId: integer("lesson_id")
+      .notNull()
+      .references(() => lessons.id),
+    status: text("status").notNull().$type<LessonProgressStatus>(),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    index("lesson_progress_user_lesson_idx").on(table.userId, table.lessonId),
+  ]
+);
 
 export const quizzes = sqliteTable("quizzes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -194,20 +204,24 @@ export const quizAnswers = sqliteTable("quiz_answers", {
     .references(() => quizOptions.id),
 });
 
-export const purchases = sqliteTable("purchases", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => users.id),
-  courseId: integer("course_id")
-    .notNull()
-    .references(() => courses.id),
-  amountPaid: integer("amount_paid").notNull(),
-  country: text("country"),
-  createdAt: text("created_at")
-    .notNull()
-    .$defaultFn(() => new Date().toISOString()),
-});
+export const purchases = sqliteTable(
+  "purchases",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    courseId: integer("course_id")
+      .notNull()
+      .references(() => courses.id),
+    amountPaid: integer("amount_paid").notNull(),
+    country: text("country"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [index("purchases_course_idx").on(table.courseId)]
+);
 
 export const teams = sqliteTable("teams", {
   id: integer("id").primaryKey({ autoIncrement: true }),
