@@ -22,9 +22,12 @@ import {
   lessons,
   modules,
   purchases,
+  quizAttempts,
+  quizzes,
   users,
 } from "~/db/schema";
 import { PLATFORM_FEE_RATE, type AnalyticsRange } from "~/lib/analytics";
+import { getCountryTierInfo } from "~/lib/ppp";
 import { getUnansweredQuestions } from "~/services/commentService";
 
 export type { AnalyticsRange };
@@ -654,10 +657,144 @@ function buildFunnel(
   return { enrolledCount, modules: [...modulesById.values()] };
 }
 
+export interface QuizPassRate {
+  quizId: number;
+  title: string;
+  lessonTitle: string;
+  /** Distinct students with at least one attempt in range. */
+  studentCount: number;
+  /** Of those, the students whose best attempt passed. */
+  passedCount: number;
+  /** passedCount over studentCount; null when no one attempted the quiz. */
+  passRatePercent: number | null;
+}
+
+/**
+ * One result per student per quiz: their best attempt in range, the highest
+ * score (a passed attempt wins a tie), judged by its stored passed flag. This
+ * matches the student roster. A quiz with no attempts still has a row.
+ */
+function getQuizPassRates(scope: CourseDetailScope): QuizPassRate[] {
+  const cutoff = resolveCutoff({ instructorId: null, ...scope });
+  const attemptConditions: SQL[] = [];
+  if (cutoff !== null) {
+    attemptConditions.push(gte(quizAttempts.attemptedAt, cutoff));
+  }
+
+  const ranked = db.$with("ranked_attempt").as(
+    db
+      .select({
+        quizId: sql<number>`${quizAttempts.quizId}`.as("ranked_quiz_id"),
+        passed: sql<number>`${quizAttempts.passed}`.as("ranked_passed"),
+        rank: sql<number>`row_number() over (partition by ${quizAttempts.userId}, ${quizAttempts.quizId} order by ${quizAttempts.score} desc, ${quizAttempts.passed} desc)`.as(
+          "attempt_rank"
+        ),
+      })
+      .from(quizAttempts)
+      .where(and(...attemptConditions))
+  );
+
+  const rows = db
+    .with(ranked)
+    .select({
+      quizId: quizzes.id,
+      title: quizzes.title,
+      lessonTitle: lessons.title,
+      studentCount: sql<number>`count(${ranked.quizId})`,
+      passedCount: sql<number>`coalesce(sum(${ranked.passed}), 0)`,
+    })
+    .from(quizzes)
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .leftJoin(ranked, and(eq(ranked.quizId, quizzes.id), eq(ranked.rank, 1)))
+    .where(eq(modules.courseId, scope.courseId))
+    .groupBy(quizzes.id)
+    .orderBy(
+      asc(modules.position),
+      asc(lessons.position),
+      asc(lessons.id),
+      asc(quizzes.id)
+    )
+    .all();
+
+  return rows.map((row) => ({
+    ...row,
+    passRatePercent:
+      row.studentCount === 0
+        ? null
+        : Math.round((row.passedCount / row.studentCount) * 100),
+  }));
+}
+
+export interface CountryRevenue {
+  /** ISO-2 code as recorded on the purchase; null when none was recorded. */
+  country: string | null;
+  purchaseCount: number;
+  revenueCents: number;
+  /**
+   * The country's CURRENT PPP tier label, or null for no country. The
+   * discount a purchase got is not stored, so this is not reconstructed.
+   */
+  discountLabel: string | null;
+  /** The country's current tier gives a discount. */
+  discounted: boolean;
+}
+
+export interface CountryRevenueSummary {
+  totalCents: number;
+  /** Revenue from countries whose current tier gives a discount. */
+  discountedCents: number;
+  purchaseCount: number;
+  /** By revenue, highest first. */
+  countries: CountryRevenue[];
+}
+
+/** The course's purchases in range, grouped by buyer country. */
+function getCountryRevenue(scope: CourseDetailScope): CountryRevenueSummary {
+  const conditions: SQL[] = [eq(purchases.courseId, scope.courseId)];
+  const cutoff = resolveCutoff({ instructorId: null, ...scope });
+  if (cutoff !== null) {
+    conditions.push(gte(purchases.createdAt, cutoff));
+  }
+
+  const revenueExpr = sql<number>`sum(${purchases.amountPaid})`;
+  const rows = db
+    .select({
+      country: purchases.country,
+      purchaseCount: sql<number>`count(*)`,
+      revenueCents: revenueExpr,
+    })
+    .from(purchases)
+    .where(and(...conditions))
+    .groupBy(purchases.country)
+    .orderBy(desc(revenueExpr), asc(purchases.country))
+    .all();
+
+  const countries = rows.map((row): CountryRevenue => {
+    if (row.country === null) {
+      return { ...row, discountLabel: null, discounted: false };
+    }
+    const { tier, label } = getCountryTierInfo(row.country);
+    return { ...row, discountLabel: label, discounted: tier > 1 };
+  });
+
+  const sum = (list: CountryRevenue[]) =>
+    list.reduce((total, row) => total + row.revenueCents, 0);
+  return {
+    totalCents: sum(countries),
+    discountedCents: sum(countries.filter((row) => row.discounted)),
+    purchaseCount: countries.reduce(
+      (total, row) => total + row.purchaseCount,
+      0
+    ),
+    countries,
+  };
+}
+
 /**
  * The deep dive on one course. Progress and the funnel come from lesson
  * progress, which has no start timestamp, so they are all time: the range
- * does not apply to them.
+ * does not apply to them. Quiz pass rates and country revenue use the range.
  */
 export function getCourseDetail(scope: CourseDetailScope) {
   const courseLessons = getCourseLessons(scope.courseId);
@@ -667,5 +804,7 @@ export function getCourseDetail(scope: CourseDetailScope) {
   return {
     progress: summariseProgress(students, enrolledCount, courseLessons.length),
     funnel: buildFunnel(courseLessons, students, enrolledCount),
+    quizPassRates: getQuizPassRates(scope),
+    countryRevenue: getCountryRevenue(scope),
   };
 }
