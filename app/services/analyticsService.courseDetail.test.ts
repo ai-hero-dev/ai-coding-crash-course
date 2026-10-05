@@ -247,3 +247,185 @@ describe("getCourseDetail: drop-off funnel", () => {
     ]);
   });
 });
+
+// ─── Quiz fixtures ───
+
+function createQuiz(lessonId: number, title = "Quiz") {
+  return testDb
+    .insert(schema.quizzes)
+    .values({ lessonId, title, passingScore: 0.7 })
+    .returning()
+    .get();
+}
+
+function attempt(
+  userId: number,
+  quizId: number,
+  score: number,
+  attemptedAt = "2026-06-10T12:00:00.000Z"
+) {
+  testDb
+    .insert(schema.quizAttempts)
+    .values({ userId, quizId, score, passed: score >= 0.7, attemptedAt })
+    .run();
+}
+
+describe("getCourseDetail: quiz pass rates", () => {
+  it("counts a student who failed and then passed once, as passed", () => {
+    const [lesson] = createCourseContent([1]);
+    const quiz = createQuiz(lesson, "Basics quiz");
+    const retaker = enrolledStudent([]);
+    attempt(retaker.id, quiz.id, 0.4, "2026-06-01T12:00:00.000Z");
+    attempt(retaker.id, quiz.id, 0.9, "2026-06-02T12:00:00.000Z");
+    const failer = enrolledStudent([]);
+    attempt(failer.id, quiz.id, 0.5);
+
+    const { quizPassRates } = getDetail();
+
+    expect(quizPassRates).toEqual([
+      {
+        quizId: quiz.id,
+        title: "Basics quiz",
+        lessonTitle: "Lesson 1",
+        studentCount: 2,
+        passedCount: 1,
+        passRatePercent: 50,
+      },
+    ]);
+  });
+
+  it("uses only attempts in range, and gives an unattempted quiz no rate", () => {
+    const [first, second] = createCourseContent([2]);
+    const early = createQuiz(first, "Early quiz");
+    const late = createQuiz(second, "Late quiz");
+    const student = enrolledStudent([]);
+    // The pass is 31 days old, so in the last 30 days only the fail counts.
+    attempt(student.id, early.id, 1, "2026-05-15T11:59:59.000Z");
+    attempt(student.id, early.id, 0.2, "2026-06-14T12:00:00.000Z");
+
+    const { quizPassRates } = getCourseDetail({
+      courseId: base.course.id,
+      range: "30d",
+      now: new Date("2026-06-15T12:00:00.000Z"),
+    });
+
+    expect(
+      quizPassRates.map((quiz) => [
+        quiz.quizId,
+        quiz.studentCount,
+        quiz.passedCount,
+        quiz.passRatePercent,
+      ])
+    ).toEqual([
+      [early.id, 1, 0, 0],
+      [late.id, 0, 0, null],
+    ]);
+  });
+
+  it("returns no rows for a course without quizzes", () => {
+    createCourseContent([2]);
+
+    expect(getDetail().quizPassRates).toEqual([]);
+  });
+});
+
+// ─── Purchase fixtures ───
+
+function purchase(
+  country: string | null,
+  amountPaid: number,
+  createdAt = "2026-06-10T12:00:00.000Z",
+  courseId = base.course.id
+) {
+  const buyer = createStudent();
+  testDb
+    .insert(schema.purchases)
+    .values({ userId: buyer.id, courseId, amountPaid, country, createdAt })
+    .run();
+}
+
+describe("getCourseDetail: revenue by country", () => {
+  it("sums revenue per buyer country, with no recorded country as its own bucket", () => {
+    purchase("US", 10000);
+    purchase("US", 10000);
+    purchase("IN", 5000); // 50% off
+    purchase("BR", 7000); // 30% off
+    purchase(null, 3000);
+    purchase(null, 1000);
+
+    const { countryRevenue } = getDetail();
+
+    expect(countryRevenue).toEqual({
+      totalCents: 36000,
+      discountedCents: 12000,
+      purchaseCount: 6,
+      countries: [
+        {
+          country: "US",
+          purchaseCount: 2,
+          revenueCents: 20000,
+          discountLabel: "Full Price",
+          discounted: false,
+        },
+        {
+          country: "BR",
+          purchaseCount: 1,
+          revenueCents: 7000,
+          discountLabel: "30% off",
+          discounted: true,
+        },
+        {
+          country: "IN",
+          purchaseCount: 1,
+          revenueCents: 5000,
+          discountLabel: "50% off",
+          discounted: true,
+        },
+        {
+          country: null,
+          purchaseCount: 2,
+          revenueCents: 4000,
+          discountLabel: null,
+          discounted: false,
+        },
+      ],
+    });
+  });
+
+  it("counts only this course's purchases in range, including one exactly on the edge", () => {
+    const other = testDb
+      .insert(schema.courses)
+      .values({
+        title: "Other",
+        slug: "other",
+        description: "Other course",
+        salesCopy: "Other course",
+        status: schema.CourseStatus.Published,
+        instructorId: base.instructor.id,
+        categoryId: base.category.id,
+      })
+      .returning()
+      .get();
+    purchase("US", 100, "2026-05-16T12:00:00.000Z"); // exactly 30 days ago
+    purchase("US", 200, "2026-05-16T11:59:59.999Z"); // just outside
+    purchase("US", 400, "2026-06-15T12:00:00.000Z", other.id);
+
+    const { countryRevenue } = getCourseDetail({
+      courseId: base.course.id,
+      range: "30d",
+      now: new Date("2026-06-15T12:00:00.000Z"),
+    });
+
+    expect(countryRevenue.totalCents).toBe(100);
+    expect(countryRevenue.purchaseCount).toBe(1);
+  });
+
+  it("returns zeros and no countries for a course with no sales", () => {
+    expect(getDetail().countryRevenue).toEqual({
+      totalCents: 0,
+      discountedCents: 0,
+      purchaseCount: 0,
+      countries: [],
+    });
+  });
+});
