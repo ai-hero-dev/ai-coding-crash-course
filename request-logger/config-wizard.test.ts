@@ -236,3 +236,32 @@ describe("the Pi custom-target model step", () => {
     expect(answer.choice.customModel).toBeUndefined();
   });
 });
+
+describe("the Claude Code on Vertex AI region step", () => {
+  it("asks for a region, with the CLOUD_ML_REGION hint, and saves it", async () => {
+    promptMocks.select.mockResolvedValueOnce("claude-code");
+    promptMocks.select.mockResolvedValueOnce("vertex");
+    promptMocks.text.mockImplementationOnce(async (options) => {
+      expect(options.message).toContain("Must match the CLOUD_ML_REGION");
+      expect(options.validate("us-east5")).toBeUndefined();
+      expect(options.validate("not a region")).toEqual(expect.any(String));
+      return " EU ";
+    });
+
+    const answer = await askChoice({ offerToRemember: false });
+    expect(answer.choice).toEqual({
+      agent: "claude-code",
+      provider: "vertex",
+      region: "eu",
+    });
+  });
+
+  it("does not ask for a region on the plain Anthropic route", async () => {
+    promptMocks.select.mockResolvedValueOnce("claude-code");
+    promptMocks.select.mockResolvedValueOnce("anthropic");
+
+    const answer = await askChoice({ offerToRemember: false });
+    expect(promptMocks.text).not.toHaveBeenCalled();
+    expect(answer.choice.region).toBeUndefined();
+  });
+});

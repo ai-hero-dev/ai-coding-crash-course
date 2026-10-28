@@ -93,7 +93,9 @@ describe("renderMarkdown with a compressed body", () => {
       agent: "Pi (ChatGPT)",
       renderer: "openai",
       path: "/backend-api/codex/responses",
-      requestBody: zlib.zstdCompressSync(body({ model: "gpt-5.1", input: "hi" })),
+      requestBody: zlib.zstdCompressSync(
+        body({ model: "gpt-5.1", input: "hi" })
+      ),
       requestEncoding: "zstd",
       responseRaw: "",
     });
@@ -110,7 +112,11 @@ describe("renderMarkdown for Anthropic", () => {
     model: "claude-sonnet-4-5",
     system: "You are Claude Code.",
     tools: [
-      { name: "Read", description: "Read a file", input_schema: { type: "object" } },
+      {
+        name: "Read",
+        description: "Read a file",
+        input_schema: { type: "object" },
+      },
     ],
     messages: [{ role: "user", content: "hello" }],
   };
@@ -161,7 +167,9 @@ describe("renderMarkdown for OpenAI", () => {
     requestBody: body({
       model: "gpt-5.1",
       instructions: "You are Codex.",
-      tools: [{ type: "function", name: "shell", parameters: { type: "object" } }],
+      tools: [
+        { type: "function", name: "shell", parameters: { type: "object" } },
+      ],
       input: [{ type: "message", role: "user", content: "hello" }],
     }),
     responseRaw:
@@ -283,7 +291,9 @@ const GEMINI_REQUEST = {
     { role: "user", parts: [{ text: "list my files" }] },
     {
       role: "model",
-      parts: [{ functionCall: { name: "list_directory", args: { path: "." } } }],
+      parts: [
+        { functionCall: { name: "list_directory", args: { path: "." } } },
+      ],
     },
     {
       role: "user",
@@ -308,7 +318,10 @@ const GEMINI_REQUEST = {
       ],
     },
   ],
-  generationConfig: { temperature: 0, thinkingConfig: { includeThoughts: true } },
+  generationConfig: {
+    temperature: 0,
+    thinkingConfig: { includeThoughts: true },
+  },
 };
 
 describe("renderMarkdown for Gemini with an API key", () => {

@@ -144,6 +144,14 @@ describe("upstreamPathPrefix", () => {
     expect(upstreamPathPrefix(target)).toBe("");
   });
 
+  it("is /v1 for Claude Code on Vertex AI", () => {
+    const target = proxyTarget(
+      { agent: "claude-code", provider: "vertex" },
+      PORT
+    );
+    expect(upstreamPathPrefix(target)).toBe("/v1");
+  });
+
   it("is empty for a custom target whose base URL is a bare origin", () => {
     const target = proxyTarget(
       {
@@ -233,7 +241,10 @@ describe("rejectUpgrade", () => {
       // A hang here means the fix regressed to the old silent-drop behavior;
       // fail fast rather than letting vitest's own timeout do it, so the
       // failure message is about the upgrade, not a generic timeout.
-      setTimeout(() => reject(new Error("upgrade attempt was not answered within 1s")), 1000);
+      setTimeout(
+        () => reject(new Error("upgrade attempt was not answered within 1s")),
+        1000
+      );
     });
 
     expect(response).toContain("HTTP/1.1 426");
