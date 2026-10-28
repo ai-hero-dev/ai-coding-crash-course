@@ -225,8 +225,7 @@ interface AgentEntry {
 const CODEX_OVERRIDE_NOTE =
   "The -c flag sets this for one run only. Your ~/.codex/config.toml is not " +
   "touched, so your normal Codex is unchanged the moment you stop using this " +
-  "command. Keep the quotes exactly as they are: Codex reads the value as TOML, " +
-  "and an unquoted URL does not parse.";
+  "command. Keep the quotes exactly as they are.";
 
 const PI_NOTE =
   "Pi has no base URL variable and no flag. A config file is the only way to " +
@@ -474,7 +473,7 @@ const AGENTS: AgentEntry[] = [
         // which is https://chatgpt.com/backend-api/codex.
         suffix: "/backend-api/codex",
         bin: "codex",
-        args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        args: ["-c", "openai_base_url='{baseUrl}'"],
         notes: [CODEX_OVERRIDE_NOTE],
       },
       {
@@ -486,7 +485,7 @@ const AGENTS: AgentEntry[] = [
         // appends `responses` to it, so the base URL keeps the /v1.
         suffix: "/v1",
         bin: "codex",
-        args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        args: ["-c", "openai_base_url='{baseUrl}'"],
         // The only usable template for a custom Codex target: Codex only
         // ever speaks the OpenAI-compatible wire format, so it is the
         // catch-all for every choice, including "anthropic" — a mismatch

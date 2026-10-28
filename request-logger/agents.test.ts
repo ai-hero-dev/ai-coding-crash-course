@@ -450,13 +450,13 @@ describe("resolveChoice — commands", () => {
   it("sets the base URL for Codex on an API key", () => {
     // Codex 0.133.0 has no OPENAI_BASE_URL. The flag is the only door.
     expect(target("codex", "openai").command).toBe(
-      `codex -c 'openai_base_url="http://localhost:8787/v1"'`
+      `codex -c openai_base_url='http://localhost:8787/v1'`
     );
   });
 
   it("sets the base URL for Codex on a ChatGPT subscription", () => {
     expect(target("codex", "chatgpt").command).toBe(
-      `codex -c 'openai_base_url="http://localhost:8787/backend-api/codex"'`
+      `codex -c openai_base_url='http://localhost:8787/backend-api/codex'`
     );
   });
 
@@ -565,11 +565,10 @@ describe("resolveChoice — commands on win32", () => {
   });
 
   it("leaves Codex's flag-based override unchanged", () => {
-    // Codex has no env var override — its whole command is a `-c` flag,
-    // single-quoted. PowerShell parses a single-quoted literal the same way
-    // bash does (no interpolation), so this needs no rewriting.
+    // Codex has no env var override — its whole command is a `-c` flag. This
+    // quote placement works in PowerShell, POSIX shells, and cmd.exe.
     expect(winTarget("codex", "openai").command).toBe(
-      `codex -c 'openai_base_url="http://localhost:8787/v1"'`
+      `codex -c openai_base_url='http://localhost:8787/v1'`
     );
   });
 });
