@@ -43,6 +43,27 @@ export interface AgentChoice {
   customModel?: string;
 }
 
+/**
+ * How a target's forwarded requests must be re-signed, when forwarding them
+ * untouched is not an option.
+ *
+ * Only AWS needs this, and only because SigV4 signs the Host header: rewriting
+ * the host — which is the whole job of a forwarding proxy — invalidates the
+ * signature the agent computed, so it has to be replaced rather than passed
+ * through. See aws-sigv4.ts. Every other provider in the catalogue authenticates
+ * with a bearer token or an API key, which survives being forwarded, so this is
+ * absent for all of them.
+ */
+export interface AwsSigning {
+  kind: "aws-sigv4";
+  /** The AWS service name in the credential scope. Only Bedrock exists in the
+   *  catalogue today; widen this if a second signed service is ever added. */
+  service: "bedrock";
+  region: string;
+  /** The AWS profile to read credentials from, when one was configured. */
+  profile?: string;
+}
+
 export interface ResolvedTarget {
   kind: "target";
   agent: string;
@@ -52,6 +73,8 @@ export interface ResolvedTarget {
   /** The single host every request is forwarded to. */
   upstreamHost: string;
   renderer: RendererId;
+  /** Set only for a provider whose requests cannot be forwarded as signed. */
+  signing?: AwsSigning;
   /** The base URL the student points their agent at, e.g. http://localhost:8787/v1 */
   baseUrl: string;
   /** The copy-pasteable command, complete with env vars and flags. */
@@ -170,8 +193,21 @@ export interface SetupFile {
 interface ProviderEntry {
   id: string;
   label: string;
+  /**
+   * The one host this provider's traffic is forwarded to.
+   *
+   * `{region}` in this value is filled from the resolve options — see
+   * resolveChoice. Only a provider whose host is regional needs it; every other
+   * entry is a fixed global host and contains no placeholder.
+   */
   upstreamHost: string;
   renderer: RendererId;
+  /**
+   * Re-sign this provider's forwarded requests. `region` and `profile` are not
+   * given here: they come from the student's environment at resolve time, not
+   * from the catalogue.
+   */
+  signing?: Omit<AwsSigning, "region" | "profile">;
   /**
    * Appended to http://localhost:PORT to make the base URL.
    *
@@ -456,6 +492,57 @@ const AGENTS: AgentEntry[] = [
           "ENABLE_TOOL_SEARCH=true matters here for the same reason it does on " +
             "the plain Anthropic route above: a non-default host turns off tool " +
             "search unless this is set.",
+        ],
+      },
+      {
+        id: "bedrock",
+        label: "AWS Bedrock",
+        // Regional, unlike every other host in this catalogue: there is no
+        // global Bedrock endpoint. {region} is filled from AWS_REGION at
+        // resolve time — see resolveChoice.
+        upstreamHost: "bedrock-runtime.{region}.amazonaws.com",
+        // Bedrock's Claude endpoint is the Anthropic Messages API shape with the
+        // model ID moved into the URL path and "anthropic_version" added to the
+        // body — the same two differences Vertex has above, and findModel() in
+        // render.ts already reads the model out of the path when the body has
+        // none. The streaming response is not SSE but AWS's binary event-stream
+        // framing, which the proxy decodes back to SSE before writing the
+        // capture, so this renderer reads it unchanged. See bedrock.ts.
+        renderer: "anthropic",
+        // The one provider whose requests cannot be forwarded as the agent
+        // signed them. See AwsSigning and aws-sigv4.ts.
+        signing: { kind: "aws-sigv4", service: "bedrock" },
+        env: [
+          ["ANTHROPIC_BEDROCK_BASE_URL", "{baseUrl}"],
+          ["CLAUDE_CODE_USE_BEDROCK", "1"],
+          ["ENABLE_TOOL_SEARCH", "true"],
+        ],
+        bin: "claude",
+        notes: [
+          "ANTHROPIC_BEDROCK_BASE_URL is the variable Claude Code reads for a " +
+            "base-URL override once Bedrock mode is on. ANTHROPIC_BASE_URL, used " +
+            "by the plain Anthropic route above, is not the documented one here.",
+          "Your AWS credentials are not forwarded, because they cannot be. AWS " +
+            "signs the Host header, and this tool has to rewrite that to forward " +
+            "anything at all, which invalidates the signature Claude Code " +
+            "computed. So this route reads your credentials itself, with `aws " +
+            "configure export-credentials`, and signs each forwarded request " +
+            "again against the real Bedrock host. Nothing is written to your AWS " +
+            "config, and no credential is ever written to a log file.",
+          "The region comes from AWS_REGION (or AWS_DEFAULT_REGION) in the shell " +
+            "that runs this tool, not from the shell that runs your agent. Both " +
+            "must agree, or you sign for one region and address another.",
+          "If your SSO session has expired you get a clear error at startup " +
+            "rather than a 403 in a log file. Run `aws sso login` and start this " +
+            "tool again.",
+        ],
+        warnings: [
+          "Claude Code applies the `env` block in ~/.claude/settings.json to " +
+            "itself at startup, on top of your shell. If you set Bedrock up " +
+            "there, the values in that file win over the ones in the printed " +
+            "command — check that ANTHROPIC_BEDROCK_BASE_URL is not also set " +
+            "there to something else, and that AWS_REGION in that file matches " +
+            "the region this tool is signing for.",
         ],
       },
     ],
@@ -1310,9 +1397,23 @@ function resolveCustomTarget(
  * statements instead (see withEnv). The caller reads `process.platform`
  * once and passes it in, the same way it already does for `port`.
  */
+/**
+ * The region used when a provider's host is regional and the environment named
+ * none. Bedrock's own default, and the region a student who never set one is
+ * most likely to have been given.
+ */
+export const DEFAULT_AWS_REGION = "us-east-1";
+
 export function resolveChoice(
   choice: AgentChoice,
-  options: { port: number; platform: NodeJS.Platform }
+  options: {
+    port: number;
+    platform: NodeJS.Platform;
+    /** AWS_REGION, for a provider whose upstreamHost carries `{region}`. */
+    region?: string;
+    /** AWS_PROFILE, for a provider that reads AWS credentials itself. */
+    awsProfile?: string;
+  }
 ): Resolution {
   const agent = AGENTS.find((a) => a.id === choice.agent);
 
@@ -1379,6 +1480,7 @@ export function resolveChoice(
   }
 
   const baseUrl = `http://localhost:${options.port}${provider.suffix ?? ""}`;
+  const region = options.region ?? DEFAULT_AWS_REGION;
 
   return {
     kind: "target",
@@ -1386,8 +1488,11 @@ export function resolveChoice(
     agentLabel: agent.label,
     provider: provider.id,
     providerLabel: provider.label,
-    upstreamHost: provider.upstreamHost,
+    upstreamHost: provider.upstreamHost.replace(/\{region\}/g, region),
     renderer: provider.renderer,
+    ...(provider.signing
+      ? { signing: { ...provider.signing, region, profile: options.awsProfile } }
+      : {}),
     baseUrl,
     command: buildCommand(provider, baseUrl, options.platform),
     setup: (provider.setup ?? []).map((file) => ({

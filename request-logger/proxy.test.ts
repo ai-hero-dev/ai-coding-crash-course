@@ -1,8 +1,10 @@
 import http from "node:http";
 import net from "node:net";
 import { describe, it, expect, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 import { resolveChoice } from "./agents";
 import {
+  applySigning,
   BURST_THRESHOLD,
   BURST_WINDOW_MS,
   burstKey,
@@ -310,5 +312,90 @@ describe("trackBurst", () => {
     const afterGap = trackBurst(state, KEY, now + BURST_WINDOW_MS + 1);
     expect(afterGap.suppressed).toBe(false);
     expect(afterGap.state.count).toBe(1);
+  });
+});
+
+describe("applySigning", () => {
+  const CREDENTIALS = {
+    accessKeyId: "ASIAEXAMPLE",
+    secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+    sessionToken: "fresh-session-token",
+    expiresAt: null,
+  };
+
+  const SIGNING = {
+    kind: "aws-sigv4" as const,
+    service: "bedrock" as const,
+    region: "us-east-1",
+  };
+
+  /**
+   * Headers as they arrive from Claude Code in Bedrock mode: signed for
+   * `Host: localhost`, which is exactly why they cannot be forwarded.
+   */
+  const AGENT_HEADERS = {
+    "content-type": "application/json",
+    "anthropic-version": "2023-06-01",
+    authorization: "AWS4-HMAC-SHA256 Credential=STALE/20260913/us-east-1/bedrock/aws4_request",
+    "x-amz-date": "20260913T175820Z",
+    "x-amz-content-sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "x-amz-security-token": "stale-session-token",
+    host: "bedrock-runtime.us-east-1.amazonaws.com",
+  };
+
+  function sign(headers: Record<string, string> = AGENT_HEADERS) {
+    return applySigning(headers, {
+      signing: SIGNING,
+      credentials: CREDENTIALS,
+      method: "POST",
+      path: "/model/us.anthropic.claude-opus-5/invoke-with-response-stream",
+      hostname: "bedrock-runtime.us-east-1.amazonaws.com",
+      body: Buffer.from('{"anthropic_version":"bedrock-2023-05-31"}'),
+      now: new Date("2026-09-13T18:30:00.000Z"),
+    });
+  }
+
+  it("replaces the agent's signature rather than forwarding it", () => {
+    const signed = sign();
+    expect(signed.authorization).not.toBe(AGENT_HEADERS.authorization);
+    expect(signed.authorization).toContain("Credential=ASIAEXAMPLE/20260913/us-east-1/bedrock/");
+  });
+
+  it("replaces every stale x-amz header the agent's signature covered", () => {
+    // A stale one left alongside a fresh signature is a 403, not a spare header:
+    // the fresh signature covers its own copy of each of these.
+    const signed = sign();
+    expect(signed["x-amz-date"]).toBe("20260913T183000Z");
+    expect(signed["x-amz-security-token"]).toBe("fresh-session-token");
+    expect(signed["x-amz-content-sha256"]).not.toBe(
+      AGENT_HEADERS["x-amz-content-sha256"]
+    );
+  });
+
+  it("hashes the body that is actually forwarded", () => {
+    const signed = sign();
+    expect(signed["x-amz-content-sha256"]).toBe(
+      createHash("sha256")
+        .update('{"anthropic_version":"bedrock-2023-05-31"}')
+        .digest("hex")
+    );
+  });
+
+  it("keeps the agent's own non-AWS headers", () => {
+    // These are what the capture is for. Signing must not quietly drop them.
+    const signed = sign();
+    expect(signed["anthropic-version"]).toBe("2023-06-01");
+    expect(signed["content-type"]).toBe("application/json");
+  });
+
+  it("brings content-type inside the signature", () => {
+    expect(sign().authorization).toContain("SignedHeaders=content-type;host;");
+  });
+
+  it("signs a request that arrived with no content-type at all", () => {
+    const { "content-type": _dropped, ...withoutContentType } = AGENT_HEADERS;
+    const signed = sign(withoutContentType);
+    expect(signed.authorization).toContain("SignedHeaders=host;");
+    expect(signed.authorization).not.toContain("content-type");
   });
 });

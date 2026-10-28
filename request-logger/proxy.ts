@@ -28,10 +28,17 @@ import {
   resolveChoice,
   shouldLogRequest,
   type AgentChoice,
+  type AwsSigning,
   type CustomTarget,
   type ResolvedTarget,
 } from "./agents";
 import { askChoice, clearChoice, loadChoice, saveChoice } from "./config";
+import {
+  createCredentialCache,
+  signRequest,
+  type AwsCredentials,
+} from "./aws-sigv4";
+import { eventStreamToSse, isEventStream } from "./bedrock";
 
 /**
  * A resolved target the proxy can actually route to and render: a catalogue
@@ -132,10 +139,115 @@ function forwardHeaders(
   return out;
 }
 
+/**
+ * Everything the agent's own AWS signature left behind.
+ *
+ * These are dropped, not forwarded, when a request is re-signed. The signature
+ * in `authorization` was computed for `Host: localhost`, so it is already
+ * worthless; the `x-amz-*` headers are the inputs it was computed over, and
+ * sending a stale one alongside a fresh signature is a 403 rather than a
+ * harmless extra header, since the fresh signature covers its own copies.
+ */
+const STALE_AWS_HEADERS = [
+  "authorization",
+  "x-amz-date",
+  "x-amz-content-sha256",
+  "x-amz-security-token",
+];
+
+/**
+ * Replace the agent's signature with one computed for the host the request is
+ * really going to. Exported for the tests, which assert on which headers survive.
+ */
+export function applySigning(
+  headers: http.OutgoingHttpHeaders,
+  input: {
+    signing: AwsSigning;
+    credentials: AwsCredentials;
+    method: string;
+    /** The path as it will be sent upstream, query string included. */
+    path: string;
+    hostname: string;
+    body: Buffer;
+    now?: Date;
+  }
+): http.OutgoingHttpHeaders {
+  const out: http.OutgoingHttpHeaders = { ...headers };
+  for (const name of STALE_AWS_HEADERS) delete out[name];
+
+  // content-type is the one agent-supplied header brought inside the signature,
+  // because AWS clients sign it and Bedrock is content-type sensitive. It is
+  // forwarded unchanged, so what is signed is what arrives.
+  const contentType = headers["content-type"];
+  const extraSignedHeaders =
+    typeof contentType === "string" ? { "content-type": contentType } : undefined;
+
+  return {
+    ...out,
+    ...signRequest({
+      method: input.method,
+      path: input.path,
+      hostname: input.hostname,
+      region: input.signing.region,
+      service: input.signing.service,
+      body: input.body,
+      credentials: input.credentials,
+      extraSignedHeaders,
+      now: input.now,
+    }),
+  };
+}
+
+/**
+ * Re-sign for the one target that needs it, without deciding what to do about
+ * a failure — that is a response concern, left to the caller. A credential
+ * read failing here is reported the same way applySigning's own errors are.
+ */
+function trySignForUpstream(
+  headers: http.OutgoingHttpHeaders,
+  input: {
+    signing: AwsSigning;
+    readCredentials: () => AwsCredentials;
+    method: string;
+    path: string;
+    hostname: string;
+    body: Buffer;
+  }
+): { headers: http.OutgoingHttpHeaders } | { error: string } {
+  try {
+    return {
+      headers: applySigning(headers, {
+        signing: input.signing,
+        credentials: input.readCredentials(),
+        method: input.method,
+        path: input.path,
+        hostname: input.hostname,
+        body: input.body,
+      }),
+    };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+/**
+ * The response as readable text for the capture: unchanged for a text
+ * stream, decoded from Bedrock's binary event-stream framing otherwise. See
+ * bedrock.ts. The bytes forwarded to the agent are a separate copy, made
+ * before this runs, and are never touched.
+ */
+function decodeResponseForCapture(
+  contentType: string | string[] | undefined,
+  body: Buffer
+): string {
+  return isEventStream(contentType) ? eventStreamToSse(body) : body.toString("utf8");
+}
+
 function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  target: ProxyTarget
+  target: ProxyTarget,
+  readCredentials: (() => AwsCredentials) | null
 ): void {
   const reqPath = req.url ?? "/";
   // The path actually sent upstream: the agent's own request path, prefixed
@@ -163,7 +275,11 @@ function handle(
       });
       upstreamRes.on("end", () => {
         res.end();
-        const responseRaw = Buffer.concat(responseChunks).toString("utf8");
+        const responseBody = Buffer.concat(responseChunks);
+        const responseRaw = decodeResponseForCapture(
+          upstreamRes.headers["content-type"],
+          responseBody
+        );
         writeCapture({
           base,
           target,
@@ -174,20 +290,49 @@ function handle(
           headers: req.headers,
           requestBody: body,
           requestEncoding: Array.isArray(encoding) ? encoding[0] : encoding,
+          responseBody,
           responseRaw,
         });
       });
     };
+
+    let headers: http.OutgoingHttpHeaders = {
+      ...forwardHeaders(req.headers, body),
+      host: hostname,
+    };
+
+    // The one target whose credentials cannot be forwarded. Any failure here is
+    // a credential problem, not a network one, so it is answered with a 500 the
+    // student can read rather than left to surface as an upstream 403.
+    const signing = target.kind === "target" ? target.signing : undefined;
+    if (signing && readCredentials) {
+      const signed = trySignForUpstream(headers, {
+        signing,
+        readCredentials,
+        method: req.method ?? "POST",
+        path: upstreamPath,
+        hostname,
+        body,
+      });
+      if ("error" in signed) {
+        console.error(`[request-logger] ${signed.error}`);
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: `request-logger could not sign this request: ${signed.error}`,
+          })
+        );
+        return;
+      }
+      headers = signed.headers;
+    }
 
     const requestOptions: http.RequestOptions = {
       hostname,
       port,
       path: upstreamPath,
       method: req.method,
-      headers: {
-        ...forwardHeaders(req.headers, body),
-        host: hostname,
-      },
+      headers,
     };
     const upstreamReq = useHttps
       ? https.request(requestOptions, onUpstreamResponse)
@@ -243,6 +388,12 @@ interface Capture {
   headers: http.IncomingHttpHeaders;
   requestBody: Buffer;
   requestEncoding?: string;
+  /** The response bytes exactly as they arrived. Written to the raw file. */
+  responseBody: Buffer;
+  /**
+   * The response as readable text: the same bytes for a text stream, and the
+   * decoded SSE for Bedrock's binary framing. This is what the renderer reads.
+   */
   responseRaw: string;
 }
 
@@ -362,10 +513,11 @@ function writeCapture(c: Capture): void {
 
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    // The raw file keeps the bytes exactly as they arrived, so the request can
-    // still be replayed. Only the .md is decoded.
+    // The raw files keep the bytes exactly as they arrived, so the exchange can
+    // still be replayed and a binary response stream is not flattened into
+    // replacement characters. Only the .md is decoded.
     fs.writeFileSync(path.join(LOG_DIR, `${c.base}.request.txt`), c.requestBody);
-    fs.writeFileSync(path.join(LOG_DIR, `${c.base}.response.txt`), c.responseRaw);
+    fs.writeFileSync(path.join(LOG_DIR, `${c.base}.response.txt`), c.responseBody);
     fs.writeFileSync(
       path.join(LOG_DIR, `${c.base}.md`),
       renderMarkdown({
@@ -414,6 +566,15 @@ function printBanner(target: ProxyTarget): void {
   field("Agent", bold(`${target.agentLabel} (${target.providerLabel})`));
   field("Listening", `http://localhost:${PORT}`);
   field("Forwards", forwards);
+  // Shown only when it applies, and worth showing then: it is the one case
+  // where what leaves this tool is not byte-for-byte what arrived.
+  if (target.kind === "target" && target.signing) {
+    const profile = target.signing.profile ?? "default";
+    field(
+      "Signing",
+      `AWS SigV4  ${dim(`${target.signing.service} / ${target.signing.region} / profile ${profile}`)}`
+    );
+  }
   field("Logs", dim(LOG_DIR));
   console.log(rule);
 
@@ -475,7 +636,17 @@ async function main(): Promise<void> {
   let choice = force ? null : loadChoice(STATE_FILE);
   if (!choice) choice = await ask(!force);
 
-  let resolution = resolveChoice(choice, { port: PORT, platform: process.platform });
+  // Read from the shell running this tool, not the one running the agent: the
+  // signature is computed here, so the region and profile that matter are the
+  // ones visible here. The bedrock provider's notes say so.
+  const resolveOptions = {
+    port: PORT,
+    platform: process.platform,
+    region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION,
+    awsProfile: process.env.AWS_PROFILE,
+  };
+
+  let resolution = resolveChoice(choice, resolveOptions);
 
   // A saved choice the catalogue no longer understands is not the student's
   // fault. Ask again rather than making them find the flag.
@@ -484,7 +655,7 @@ async function main(): Promise<void> {
     console.log(`[request-logger] ${resolution.message}`);
     // A saved file exists, so the student already asked to be remembered.
     choice = await ask(false);
-    resolution = resolveChoice(choice, { port: PORT, platform: process.platform });
+    resolution = resolveChoice(choice, resolveOptions);
   }
 
   if (resolution.kind === "error") {
@@ -543,7 +714,27 @@ async function main(): Promise<void> {
   }
 
   const target = resolution;
-  const server = http.createServer((req, res) => handle(req, res, target));
+  const signing = target.kind === "target" ? target.signing : undefined;
+
+  let readCredentials: (() => AwsCredentials) | null = null;
+  if (signing) {
+    readCredentials = createCredentialCache({ profile: signing.profile });
+    // Called once here, before the port opens, so an expired SSO session is a
+    // message the student reads now rather than a 403 they find in a log file
+    // after a confusing conversation with their agent.
+    try {
+      readCredentials();
+    } catch (err) {
+      console.error("");
+      console.error(`[request-logger] ${(err as Error).message}`);
+      console.error("");
+      process.exit(1);
+    }
+  }
+
+  const server = http.createServer((req, res) =>
+    handle(req, res, target, readCredentials)
+  );
   server.on("upgrade", rejectUpgrade);
   server.listen(PORT, () => {
     printBanner(target);
