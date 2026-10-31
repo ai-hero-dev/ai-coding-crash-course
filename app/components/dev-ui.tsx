@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Form, useLocation } from "react-router";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
@@ -40,9 +40,29 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+const MINIMIZED_KEY = "cadence-devui-minimized";
+
 export function DevUI({ users, currentUser, devCountry, countryTierInfo, countries }: DevUIProps) {
-  const [minimized, setMinimized] = useState(false);
+  const [minimized, setMinimizedState] = useState(false);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      setMinimizedState(localStorage.getItem(MINIMIZED_KEY) === "true");
+    } catch {
+      /* silently fail */
+    }
+  }, []);
+
+  function setMinimized(next: boolean) {
+    setMinimizedState(next);
+    try {
+      localStorage.setItem(MINIMIZED_KEY, String(next));
+    } catch {
+      /* silently fail */
+    }
+  }
+
   const location = useLocation();
   if (minimized) {
     return (
