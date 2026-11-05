@@ -40,8 +40,9 @@ export const NO_RECIPE: Record<string, string> = {
   "antigravity/api-key":
     "the fake upstream has no Gemini shape yet, and agy is not on npm.",
   "grok/xai":
-    "grok.ts is written but not run yet: verifying it needs the x.ai binary downloaded and executed, " +
-    "which was not permitted on 2026-11-05. Register it once it passes.",
+    "grok.ts was run on 2026-11-05 (grok 1.0.70): headless `-p` refuses any XAI_API_KEY with " +
+    "'Not signed in'; the binary says headless mode needs a grok.com session, or `grok agent stdio` " +
+    "for API-key access. Keyless e2e is impossible on this route; it needs a real grok.com login.",
   junie:
     "Junie CLI is closed source and is not installable headlessly for free.",
 };
