@@ -1,12 +1,16 @@
 import http from "node:http";
 import net from "node:net";
+import path from "node:path";
 import { describe, it, expect, afterEach } from "vitest";
 import { resolveChoice } from "./agents";
 import {
   BURST_THRESHOLD,
   BURST_WINDOW_MS,
   burstKey,
+  readSettings,
   rejectUpgrade,
+  TEST_DIR_ENV,
+  TEST_UPSTREAM_ENV,
   trackBurst,
   upstreamConnection,
   upstreamPathPrefix,
@@ -310,5 +314,97 @@ describe("trackBurst", () => {
     const afterGap = trackBurst(state, KEY, now + BURST_WINDOW_MS + 1);
     expect(afterGap.suppressed).toBe(false);
     expect(afterGap.state.count).toBe(1);
+  });
+});
+
+describe("readSettings (the test-only overrides)", () => {
+  const HERE = path.join(path.sep, "course", "request-logger");
+
+  it("keeps the saved choice and logs next to proxy.ts, and the real upstream, when neither is set", () => {
+    // This is every student's run: nothing in their shell sets either variable.
+    expect(readSettings({}, HERE)).toEqual({
+      logDir: path.join(HERE, "logs"),
+      stateFile: path.join(HERE, ".agent-choice.json"),
+      upstreamOverride: null,
+    });
+  });
+
+  it("treats an empty variable as unset", () => {
+    expect(
+      readSettings({ [TEST_DIR_ENV]: "", [TEST_UPSTREAM_ENV]: "" }, HERE)
+    ).toEqual(readSettings({}, HERE));
+  });
+
+  it("ignores unrelated variables, PORT included", () => {
+    expect(readSettings({ PORT: "9999", HOME: "/home/x" }, HERE)).toEqual(
+      readSettings({}, HERE)
+    );
+  });
+
+  it("moves both the saved choice and the logs folder under REQUEST_LOGGER_TEST_DIR", () => {
+    const dir = path.join(path.sep, "tmp", "e2e-run");
+    const settings = readSettings({ [TEST_DIR_ENV]: dir }, HERE);
+    expect(settings.logDir).toBe(path.join(dir, "logs"));
+    expect(settings.stateFile).toBe(path.join(dir, ".agent-choice.json"));
+    expect(settings.upstreamOverride).toBeNull();
+  });
+
+  it("reads REQUEST_LOGGER_TEST_UPSTREAM as an origin", () => {
+    const settings = readSettings(
+      { [TEST_UPSTREAM_ENV]: "http://127.0.0.1:4010" },
+      HERE
+    );
+    expect(settings.upstreamOverride?.origin).toBe("http://127.0.0.1:4010");
+    expect(settings.logDir).toBe(path.join(HERE, "logs"));
+  });
+
+  it.each([
+    ["not a URL", "localhost:4010"],
+    ["a non-HTTP scheme", "ftp://127.0.0.1:4010"],
+    ["a path", "http://127.0.0.1:4010/v1"],
+    ["a query", "http://127.0.0.1:4010/?x=1"],
+  ])("refuses an upstream override with %s", (_, value) => {
+    expect(() => readSettings({ [TEST_UPSTREAM_ENV]: value }, HERE)).toThrow(
+      TEST_UPSTREAM_ENV
+    );
+  });
+});
+
+describe("upstreamConnection with the test-only upstream override", () => {
+  it("sends a catalogue target to the override instead of its fixed host", () => {
+    const target = proxyTarget(
+      { agent: "claude-code", provider: "anthropic" },
+      PORT
+    );
+    expect(
+      upstreamConnection(target, new URL("http://127.0.0.1:4010"))
+    ).toEqual({ hostname: "127.0.0.1", port: 4010, useHttps: false });
+  });
+
+  it("sends a custom target to the override, and keeps its path prefix", () => {
+    const target = proxyTarget(
+      {
+        agent: "opencode",
+        provider: "custom",
+        customBaseUrl: "https://opencode.ai/zen/go",
+        customRenderer: "openai",
+        customModel: "test-model",
+      },
+      PORT
+    );
+    expect(
+      upstreamConnection(target, new URL("https://fake.test"))
+    ).toEqual({ hostname: "fake.test", port: 443, useHttps: true });
+    expect(upstreamPathPrefix(target)).toBe("/zen/go");
+  });
+
+  it("is a no-op when the override is null, which is the default", () => {
+    const target = proxyTarget({ agent: "codex", provider: "openai" }, PORT);
+    expect(upstreamConnection(target, null)).toEqual(upstreamConnection(target));
+    expect(upstreamConnection(target)).toEqual({
+      hostname: "api.openai.com",
+      port: 443,
+      useHttps: true,
+    });
   });
 });

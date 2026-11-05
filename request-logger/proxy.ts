@@ -44,8 +44,72 @@ type ProxyTarget = ResolvedTarget | CustomTarget;
 const PORT = Number(process.env.PORT ?? 8787);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const LOG_DIR = path.join(HERE, "logs");
-const STATE_FILE = path.join(HERE, ".agent-choice.json");
+
+// ---------------------------------------------------------------------------
+// Test-only overrides
+// ---------------------------------------------------------------------------
+
+/**
+ * The two environment variables the end-to-end harness (e2e/) sets, and
+ * nothing else does. A student never sets either, and with both unset every
+ * path and every upstream is exactly what it has always been.
+ *
+ *  - REQUEST_LOGGER_TEST_DIR moves the saved choice (.agent-choice.json) and
+ *    the logs/ folder out of request-logger/ into another directory, so a
+ *    test run never reads or overwrites the student's own.
+ *  - REQUEST_LOGGER_TEST_UPSTREAM replaces the scheme, host and port every
+ *    request is forwarded to — a catalogue target's fixed host included —
+ *    with one origin, e.g. http://127.0.0.1:4010 (a fake upstream). The
+ *    request path, and a custom target's path prefix, are kept as they are,
+ *    so the fake sees exactly the path the real host would have.
+ *
+ * The banner names the override whenever one is set, so it cannot go unseen.
+ */
+export const TEST_DIR_ENV = "REQUEST_LOGGER_TEST_DIR";
+export const TEST_UPSTREAM_ENV = "REQUEST_LOGGER_TEST_UPSTREAM";
+
+export interface Settings {
+  logDir: string;
+  stateFile: string;
+  /** Only set by REQUEST_LOGGER_TEST_UPSTREAM. Null means "the target's own host". */
+  upstreamOverride: URL | null;
+}
+
+/** Read the test-only overrides. Pure: give it an env and a home folder. */
+export function readSettings(
+  env: Record<string, string | undefined>,
+  here: string
+): Settings {
+  const dir = env[TEST_DIR_ENV] ? path.resolve(env[TEST_DIR_ENV]!) : here;
+  return {
+    logDir: path.join(dir, "logs"),
+    stateFile: path.join(dir, ".agent-choice.json"),
+    upstreamOverride: parseUpstreamOverride(env[TEST_UPSTREAM_ENV]),
+  };
+}
+
+function parseUpstreamOverride(raw: string | undefined): URL | null {
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${TEST_UPSTREAM_ENV} is not a URL: ${raw}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${TEST_UPSTREAM_ENV} must be http:// or https://: ${raw}`);
+  }
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error(
+      `${TEST_UPSTREAM_ENV} must be an origin only (scheme, host, port), with no path: ${raw}`
+    );
+  }
+  return url;
+}
+
+const SETTINGS = readSettings(process.env, HERE);
+const LOG_DIR = SETTINGS.logDir;
+const STATE_FILE = SETTINGS.stateFile;
 
 // ---------------------------------------------------------------------------
 // Proxying
@@ -68,11 +132,23 @@ function baseName(target: ProxyTarget): string {
  * arbitrary port (a local Ollama server, say), so its scheme and port are
  * parsed from the base URL instead of assumed.
  */
-export function upstreamConnection(target: ProxyTarget): {
+export function upstreamConnection(
+  target: ProxyTarget,
+  override: URL | null = null
+): {
   hostname: string;
   port: number;
   useHttps: boolean;
 } {
+  // Test-only: see REQUEST_LOGGER_TEST_UPSTREAM. Never set for a student.
+  if (override) {
+    const useHttps = override.protocol === "https:";
+    return {
+      hostname: override.hostname,
+      port: override.port ? Number(override.port) : useHttps ? 443 : 80,
+      useHttps,
+    };
+  }
   if (target.kind === "target") {
     return { hostname: target.upstreamHost, port: 443, useHttps: true };
   }
@@ -152,7 +228,10 @@ function handle(
     const timestamp = new Date().toISOString();
     const base = baseName(target);
     const encoding = req.headers["content-encoding"];
-    const { hostname, port, useHttps } = upstreamConnection(target);
+    const { hostname, port, useHttps } = upstreamConnection(
+      target,
+      SETTINGS.upstreamOverride
+    );
 
     const onUpstreamResponse = (upstreamRes: http.IncomingMessage) => {
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
@@ -310,7 +389,7 @@ export function trackBurst(
   };
 }
 
-/** Module-level on purpose: one guard for the whole process, the same as LOG_DIR. */
+/** Module-level on purpose: one guard for the whole process, the same as SETTINGS. */
 let burstState: BurstState | null = null;
 
 function writeCapture(c: Capture): void {
@@ -383,7 +462,9 @@ function writeCapture(c: Capture): void {
     );
     console.log(
       `${dim(`[request-logger] ${label}  ${c.method} ${c.path} ->`)} ${c.statusCode}  ${bold(
-        `logs/${c.base}.md`
+        LOG_DIR === path.join(HERE, "logs")
+          ? `logs/${c.base}.md`
+          : path.join(LOG_DIR, `${c.base}.md`)
       )}`
     );
   } catch (err) {
@@ -415,6 +496,10 @@ function printBanner(target: ProxyTarget): void {
   field("Listening", `http://localhost:${PORT}`);
   field("Forwards", forwards);
   field("Logs", dim(LOG_DIR));
+  const override = SETTINGS.upstreamOverride;
+  if (override) {
+    field("TEST ONLY", bold(`${TEST_UPSTREAM_ENV} is set: forwarding to ${override.origin} instead`));
+  }
   console.log(rule);
 
   for (const file of target.setup) {
