@@ -24,14 +24,13 @@ export const claudeCode: Recipe = {
  * Code's own switch for running behind a gateway that adds auth, so it
  * needs no Google credentials, and sends none: the key checks are off.
  *
- * Not in RECIPES yet, because it fails on main, correctly: the vertex entry
- * has no "/v1" suffix, so the call arrives on /projects/… where real Vertex
- * serves /v1/projects/… (a 404 against the real host). Register it with the
- * fix — see NO_RECIPE["claude-code/vertex"].
+ * Claude Code sends /projects/… with no /v1 when ANTHROPIC_VERTEX_BASE_URL
+ * is set; the entry's upstream path prefix (#122) puts the /v1 back, so the
+ * call reaches the upstream on /v1/projects/…, the path real Vertex serves.
  */
 export const claudeCodeVertex: Recipe = {
   name: "claude-code/vertex",
-  choice: { agent: "claude-code", provider: "vertex" },
+  choice: { agent: "claude-code", provider: "vertex", region: "global" },
   install: claudeCode.install,
   env: () => ({
     CLAUDE_CODE_USE_VERTEX: "1",
