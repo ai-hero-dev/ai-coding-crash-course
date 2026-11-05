@@ -115,6 +115,7 @@ from this table. It is here so you can see what is supported before you start.
 | Gemini CLI      | Yes   | One command. The free Google login works.                                                |
 | Antigravity CLI | Yes   | A config file and a real Gemini API key — see below.                                     |
 | Junie           | Yes   | A config file, and a real API key pasted in — see below.                                 |
+| Mistral Vibe    | Yes   | One command. A Mistral API key, or the key `vibe --setup` saved — see below.             |
 | Cursor CLI      | No    | Nothing can make it work. See below.                                                     |
 | Amp             | No    | Nothing can make it work. See below.                                                     |
 
@@ -136,11 +137,11 @@ logs folder stays empty with no error at all.
 The wizard asks which Vertex AI region to forward to (free text, default
 `global`):
 
-| Region you type | Forwards to |
-|---|---|
-| `global` | `aiplatform.googleapis.com/v1` |
+| Region you type           | Forwards to                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `global`                  | `aiplatform.googleapis.com/v1`                                               |
 | `eu`, `us` (multi-region) | `aiplatform.eu.rep.googleapis.com/v1`, `aiplatform.us.rep.googleapis.com/v1` |
-| a region, e.g. `us-east5` | `us-east5-aiplatform.googleapis.com/v1` |
+| a region, e.g. `us-east5` | `us-east5-aiplatform.googleapis.com/v1`                                      |
 
 It must match the `CLOUD_ML_REGION` you run Claude Code with, because Claude
 Code builds its request paths from that variable. The answer is saved with the
@@ -191,6 +192,21 @@ paste in a real API key yourself — an Anthropic key on the
 Anthropic-compatible route, an OpenAI key on the OpenAI-compatible one.
 Treat that file the way you would any other file holding a real key: do not
 commit it.
+
+### Mistral Vibe
+
+Vibe has no base URL variable or flag, but it reads any `config.toml`
+setting from a `VIBE_` environment variable. The printed command sets
+`VIBE_PROVIDERS` to a copy of Vibe's built-in `mistral` provider with its
+`api_base` pointed at this tool, for that run only — your
+`~/.vibe/config.toml` is not touched. It also sets
+`VIBE_ENABLE_TELEMETRY=false`: Vibe sends its usage telemetry to the same
+host as its model calls, so without it every turn writes a few extra
+captures that never reach the model.
+
+Mistral's chat API has OpenAI's chat/completions shape, so the OpenAI
+renderer reads it. Vibe's default model reasons, and streams its reasoning
+as `thinking` chunks; those show up as `<thinking>` in your capture.
 
 ### Why Cursor and Amp cannot work
 
@@ -339,7 +355,7 @@ of these happened:
 5. **You are on an older Codex, or following an older guide.** Codex used to
    read an OPENAI_BASE_URL variable. Version 0.133.0 does not. It ignores the
    variable in silence, so the only sign is an empty logs folder. Use the
-   command this tool prints.
+   command this tool prints exactly, including its quote placement.
 
 ## How much this was tested
 
@@ -366,6 +382,14 @@ Be fair to the tool when you judge a failure.
   authentication and the `GOOGLE_GEMINI_BASE_URL` variable), not against real
   source or a real install, and its account sign-in route was not verified
   at all — see "Antigravity CLI" above for why that route is left out.
+- **Seven entries are driven end to end in CI, against a fake upstream.**
+  `npm run request-logger:e2e` installs pinned releases of Claude Code,
+  Codex, OpenCode, Pi and Mistral Vibe, runs the real proxy and the exact
+  command it prints, and checks the capture. That covers each of their
+  API-key routes, Mistral Vibe's fixed `api.mistral.ai` entry included (see
+  `e2e/README.md`). It proves the routing, the suffix and the capture, not
+  that the real host accepts the request. Vibe's browser sign-in has not
+  been driven.
 - **A custom base URL is only as tested as the agent it is attached to.** The
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
@@ -382,6 +406,9 @@ If one of them is wrong, it is worth reporting, and the fix is likely to be one
 line in `agents.ts`.
 
 ## Extending it
+
+Adding an agent has a checklist, including the e2e recipe every new entry
+needs: see [`ADDING_AN_AGENT.md`](./ADDING_AN_AGENT.md).
 
 - **Add an agent:** add one entry to the catalogue in `agents.ts`, giving its
   upstream host, its renderer, its base URL suffix, and its command. That is the

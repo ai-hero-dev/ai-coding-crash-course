@@ -12,7 +12,7 @@
  * are data rather than prose, they can be tested — and they cannot silently rot
  * the way a README does.
  *
- * Adding an eighth agent should be one entry here and nothing else.
+ * Adding another agent should be one entry here and nothing else.
  *
  * Not every student's setup fits a catalogue entry, though — a local model
  * server or a small provider has no fixed host to hard-code. For those, the
@@ -246,8 +246,7 @@ interface AgentEntry {
 const CODEX_OVERRIDE_NOTE =
   "The -c flag sets this for one run only. Your ~/.codex/config.toml is not " +
   "touched, so your normal Codex is unchanged the moment you stop using this " +
-  "command. Keep the quotes exactly as they are: Codex reads the value as TOML, " +
-  "and an unquoted URL does not parse.";
+  "command. Keep the quotes exactly as they are.";
 
 const PI_NOTE =
   "Pi has no base URL variable and no flag. A config file is the only way to " +
@@ -397,6 +396,45 @@ const ANTIGRAVITY_LOGIN_WARNING =
   "host rather than the Code Assist host Gemini CLI's own free login uses — " +
   "so this catalogue does not claim that route works. Ask for it via the " +
   "issue tracker if you need it logged.";
+
+/**
+ * Mistral Vibe (`vibe`) has no base URL variable or flag of its own, but it
+ * reads any top-level config field from a VIBE_<FIELD> environment variable
+ * (pydantic-settings, `env_prefix="VIBE_"`), above ~/.vibe/config.toml and
+ * below nothing the student is likely to have set. `providers` is a list
+ * merged by `name` (WithUnionMerge(merge_key="name") in vibe_schema.py), so a
+ * one-entry VIBE_PROVIDERS list named "mistral" replaces only the built-in
+ * Mistral provider, and only for this run — the same "nothing on disk
+ * changes" property Codex's -c flag gives.
+ *
+ * The entry is the built-in one (vibe/core/config/vibe_schema.py,
+ * DEFAULT_PROVIDERS) with api_base swapped. backend="mistral" keeps Vibe on
+ * its Mistral SDK route, which strips the /v1 from api_base and posts to
+ * /v1/chat/completions — hence the suffix below. preserve_api_base stops
+ * Vibe's /whoami tenant check from writing the real host back over it.
+ * Verified against mistral-vibe 3.1.0.
+ */
+const VIBE_PROVIDERS = JSON.stringify([
+  {
+    name: "mistral",
+    api_base: "{baseUrl}",
+    api_key_env_var: "MISTRAL_API_KEY",
+    backend: "mistral",
+    preserve_api_base: true,
+  },
+]);
+
+const VIBE_NOTE =
+  "Vibe has no base URL variable or flag, but it reads any config.toml " +
+  "setting from a VIBE_ environment variable. VIBE_PROVIDERS replaces " +
+  "Vibe's built-in mistral provider for this run only, so your " +
+  "~/.vibe/config.toml is not touched. It works with MISTRAL_API_KEY " +
+  "exported in your shell, or with the key `vibe --setup` saved for you.";
+
+const VIBE_TELEMETRY_NOTE =
+  "VIBE_ENABLE_TELEMETRY=false turns Vibe's usage telemetry off for this " +
+  "run. Vibe sends it to the same host as the model calls, so without it " +
+  "every turn also writes a few telemetry captures that never reach the model.";
 
 const OPENCODE_NOTE =
   "The environment variable above works, but only by accident: OpenCode passes " +
@@ -572,7 +610,7 @@ const AGENTS: AgentEntry[] = [
         // which is https://chatgpt.com/backend-api/codex.
         suffix: "/backend-api/codex",
         bin: "codex",
-        args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        args: ["-c", "openai_base_url='{baseUrl}'"],
         notes: [CODEX_OVERRIDE_NOTE],
       },
       {
@@ -584,7 +622,7 @@ const AGENTS: AgentEntry[] = [
         // appends `responses` to it, so the base URL keeps the /v1.
         suffix: "/v1",
         bin: "codex",
-        args: ["-c", `'openai_base_url="{baseUrl}"'`],
+        args: ["-c", "openai_base_url='{baseUrl}'"],
         // The only usable template for a custom Codex target: Codex only
         // ever speaks the OpenAI-compatible wire format, so it is the
         // catch-all for every choice, including "anthropic" — a mismatch
@@ -928,6 +966,28 @@ const AGENTS: AgentEntry[] = [
     ],
   },
   {
+    id: "mistral-vibe",
+    label: "Mistral Vibe",
+    providers: [
+      {
+        id: "mistral",
+        label: "Mistral",
+        upstreamHost: "api.mistral.ai",
+        // Mistral's chat API is OpenAI's chat/completions shape, plus
+        // list-shaped content (thinking and text chunks) on reasoning models,
+        // which the openai renderer reads too.
+        renderer: "openai",
+        suffix: "/v1",
+        env: [
+          ["VIBE_PROVIDERS", VIBE_PROVIDERS],
+          ["VIBE_ENABLE_TELEMETRY", "false"],
+        ],
+        bin: "vibe",
+        notes: [VIBE_NOTE, VIBE_TELEMETRY_NOTE],
+      },
+    ],
+  },
+  {
     id: "amp",
     label: "Amp",
     reason:
@@ -1093,7 +1153,19 @@ function withEnv(
       bin,
     ].join("; ");
   }
-  return [...env.map(([key, value]) => `${key}=${value}`), bin].join(" ");
+  return [
+    ...env.map(([key, value]) => `${key}=${posixValue(value)}`),
+    bin,
+  ].join(" ");
+}
+
+/**
+ * A POSIX assignment value, quoted only when the shell would otherwise split
+ * or expand it. URLs and plain words print bare, as they always have; a JSON
+ * value (Mistral Vibe's VIBE_PROVIDERS) is single-quoted.
+ */
+function posixValue(value: string): string {
+  return /^[\w@%+=:,./-]*$/.test(value) ? value : shellQuote(value);
 }
 
 /** Quote one complete POSIX shell argument, including embedded single quotes. */

@@ -29,3 +29,6 @@
 
 # request-logger remembers which agent you chose
 /request-logger/.agent-choice.json
+
+# request-logger e2e harness: pinned agent installs
+/request-logger/e2e/.tools/

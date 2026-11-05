@@ -1,0 +1,53 @@
+name: request-logger
+
+on:
+  pull_request:
+    paths:
+      - "request-logger/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/request-logger.yml"
+  push:
+    branches: [main]
+    paths:
+      - "request-logger/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/request-logger.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run request-logger
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      # Pinned agent installs, reused while no recipe changes its pin.
+      - uses: actions/cache@v4
+        with:
+          path: request-logger/e2e/.tools
+          key: request-logger-e2e-tools-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('request-logger/e2e/recipes/**', 'request-logger/e2e/install.ts') }}
+      # --strict: a recipe that cannot install here fails the job, not skips.
+      - run: npm run request-logger:e2e -- --strict
