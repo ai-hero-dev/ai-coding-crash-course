@@ -9,6 +9,7 @@
 import type { Recipe } from "../driver";
 import { claudeCode } from "./claude-code";
 import { codex } from "./codex";
+import { mistralVibe } from "./mistral-vibe";
 import { opencode, opencodeOpenAI } from "./opencode";
 import { pi, piOpenAI } from "./pi";
 
@@ -19,6 +20,7 @@ export const RECIPES: Recipe[] = [
   opencodeOpenAI,
   pi,
   piOpenAI,
+  mistralVibe,
 ];
 
 /**

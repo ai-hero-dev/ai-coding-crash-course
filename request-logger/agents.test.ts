@@ -85,6 +85,7 @@ describe("listAgents", () => {
       "gemini",
       "antigravity",
       "junie",
+      "mistral-vibe",
       "cursor",
       "amp",
     ]);
@@ -1592,5 +1593,102 @@ describe("resolveChoice — Junie", () => {
 
   it("rejects Junie with no base URL", () => {
     expect(resolveChoice({ agent: "junie" }, PORT).kind).toBe("error");
+  });
+});
+
+describe("resolveChoice — Mistral Vibe", () => {
+  const VIBE_PROVIDERS = [
+    {
+      name: "mistral",
+      api_base: "http://localhost:8787/v1",
+      api_key_env_var: "MISTRAL_API_KEY",
+      backend: "mistral",
+      preserve_api_base: true,
+    },
+  ];
+
+  /** Run the printed assignments in a real shell and read one variable back. */
+  function envFrom(command: string, name: string): string {
+    const assignment = command.slice(0, -" vibe".length);
+    return execFileSync(
+      "/bin/sh",
+      [
+        "-c",
+        `${assignment} node -e 'process.stdout.write(process.env.${name} ?? "")'`,
+      ],
+      { encoding: "utf8" }
+    );
+  }
+
+  it("is supported, with no provider question", () => {
+    const vibe = listAgents().find((agent) => agent.id === "mistral-vibe");
+    expect(vibe).toMatchObject({
+      label: "Mistral Vibe",
+      supported: true,
+      needsProvider: false,
+      alwaysCustom: false,
+    });
+  });
+
+  it("sends its traffic to the Mistral API", () => {
+    expect(target("mistral-vibe").upstreamHost).toBe("api.mistral.ai");
+  });
+
+  it("reads it with the OpenAI renderer, because Mistral's chat API has that shape", () => {
+    expect(target("mistral-vibe").renderer).toBe("openai");
+  });
+
+  it("keeps the /v1 in the base URL, because Vibe's Mistral SDK strips it and adds it back", () => {
+    expect(target("mistral-vibe").baseUrl).toBe("http://localhost:8787/v1");
+  });
+
+  it("overrides Vibe's built-in mistral provider for one run, through VIBE_PROVIDERS", () => {
+    const { command } = target("mistral-vibe");
+    expect(command.endsWith(" vibe")).toBe(true);
+    expect(JSON.parse(envFrom(command, "VIBE_PROVIDERS"))).toEqual(
+      VIBE_PROVIDERS
+    );
+  });
+
+  it("turns Vibe's telemetry off, so its events do not land in the logs folder", () => {
+    expect(
+      envFrom(target("mistral-vibe").command, "VIBE_ENABLE_TELEMETRY")
+    ).toBe("false");
+  });
+
+  it("quotes the JSON for PowerShell on win32", () => {
+    const result = resolveChoice(
+      { agent: "mistral-vibe" },
+      { port: 8787, platform: "win32" }
+    );
+    if (result.kind !== "target") throw new Error("expected a target");
+    expect(result.command).toBe(
+      `$env:VIBE_PROVIDERS = '${JSON.stringify(VIBE_PROVIDERS)}'; ` +
+        "$env:VIBE_ENABLE_TELEMETRY = 'false'; vibe"
+    );
+  });
+
+  it("writes no config file, so the student's ~/.vibe/config.toml is untouched", () => {
+    expect(target("mistral-vibe").setup).toEqual([]);
+  });
+
+  it("says why the telemetry is off, and that it is for this run only", () => {
+    const notes = target("mistral-vibe").notes.join(" ");
+    expect(notes).toContain("VIBE_ENABLE_TELEMETRY");
+    expect(notes).toContain("config.toml");
+  });
+
+  it("points a custom base URL target at the typed server with the same command shape", () => {
+    const result = customTarget({
+      agent: "mistral-vibe",
+      provider: CUSTOM_ID,
+      customBaseUrl: "http://localhost:9911",
+      customRenderer: "openai",
+    });
+    expect(result.upstreamBaseUrl).toBe("http://localhost:9911");
+    expect(result.baseUrl).toBe("http://localhost:8787/v1");
+    expect(JSON.parse(envFrom(result.command, "VIBE_PROVIDERS"))).toEqual(
+      VIBE_PROVIDERS
+    );
   });
 });
