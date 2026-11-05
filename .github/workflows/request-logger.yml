@@ -40,6 +40,7 @@ jobs:
           node-version: 22
           cache: npm
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: "3.12"
       - run: npm ci
@@ -47,6 +48,6 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: request-logger/e2e/.tools
-          key: request-logger-e2e-tools-${{ runner.os }}-${{ hashFiles('request-logger/e2e/recipes/**', 'request-logger/e2e/install.ts') }}
+          key: request-logger-e2e-tools-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('request-logger/e2e/recipes/**', 'request-logger/e2e/install.ts') }}
       # --strict: a recipe that cannot install here fails the job, not skips.
       - run: npm run request-logger:e2e -- --strict

@@ -182,6 +182,52 @@ describe("renderMarkdown for OpenAI", () => {
   });
 });
 
+describe("renderMarkdown for Mistral's chat completions", () => {
+  // Mistral's chat API is OpenAI-shaped, except that a reasoning model's
+  // content — in a streamed delta and in a replayed assistant message — can be
+  // a list of chunks mixing "thinking" and "text", instead of a plain string.
+  const out = renderMarkdown({
+    ...BASE,
+    agent: "Mistral Vibe",
+    renderer: "openai",
+    path: "/v1/chat/completions",
+    requestBody: body({
+      model: "mistral-vibe-cli-latest",
+      messages: [
+        { role: "system", content: "You are Vibe." },
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: [{ type: "text", text: "earlier reasoning" }] },
+            { type: "text", text: "earlier answer" },
+          ],
+        },
+        { role: "user", content: "again" },
+      ],
+    }),
+    responseRaw:
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"pondering"}]}]},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{"content":[{"type":"text","text":"Hel"}]},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n",
+  });
+
+  it("joins the reply text across string and list-shaped deltas", () => {
+    expect(out).toContain("<assistant-text>\n\nHello\n\n</assistant-text>");
+  });
+
+  it("separates the streamed thinking from the reply", () => {
+    expect(out).toContain("<thinking>\n\npondering\n\n</thinking>");
+  });
+
+  it("shows a replayed assistant message's thinking as thinking, not as a JSON dump", () => {
+    expect(out).toContain("<thinking>\n\nearlier reasoning\n\n</thinking>");
+    expect(out).toContain("earlier answer");
+    expect(out).not.toContain('"type": "thinking"');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // "raw" — the explicit fallback for a custom target with no known wire format
 // ---------------------------------------------------------------------------

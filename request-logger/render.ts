@@ -170,6 +170,17 @@ function blockText(block: any): string {
   return "";
 }
 
+/** A Mistral "thinking" chunk: { type: "thinking", thinking: [text chunks | strings] }. */
+function mistralThinkingText(chunk: any): string {
+  const inner = chunk?.thinking;
+  if (typeof inner === "string") return inner;
+  return Array.isArray(inner) ? inner.map(blockText).join("") : "";
+}
+
+function thinkingBlock(text: string): string {
+  return ["<thinking>", "", text, "", "</thinking>"].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Request rendering
 // ---------------------------------------------------------------------------
@@ -398,7 +409,13 @@ function renderOpenAIChatContent(msg: any): string {
   } else if (Array.isArray(content)) {
     out.push(
       content
-        .map((b) => (b?.type === "image_url" ? "`[image_url]`" : blockText(b) || fenceJson(b)))
+        .map((b) =>
+          b?.type === "image_url"
+            ? "`[image_url]`"
+            : b?.type === "thinking"
+              ? thinkingBlock(mistralThinkingText(b))
+              : blockText(b) || fenceJson(b)
+        )
         .join("\n\n")
     );
   }
@@ -810,6 +827,7 @@ function renderOpenAIResponse(raw: string, reqJson: any): string {
 
 function renderOpenAIChatStream(events: any[]): string {
   let text = "";
+  let thinking = "";
   const toolCalls: Record<number, { name: string; args: string; id?: string }> = {};
   let finish: string | undefined;
   let usage: any;
@@ -818,6 +836,14 @@ function renderOpenAIChatStream(events: any[]): string {
     const choice = ev.choices?.[0];
     const delta = choice?.delta ?? {};
     if (typeof delta.content === "string") text += delta.content;
+    // Mistral's reasoning models stream content as a list of chunks instead,
+    // mixing "thinking" and "text", and may switch shape mid-stream.
+    if (Array.isArray(delta.content)) {
+      for (const chunk of delta.content) {
+        if (chunk?.type === "thinking") thinking += mistralThinkingText(chunk);
+        else text += blockText(chunk);
+      }
+    }
     if (Array.isArray(delta.tool_calls)) {
       for (const tc of delta.tool_calls) {
         const idx = tc.index ?? 0;
@@ -835,6 +861,7 @@ function renderOpenAIChatStream(events: any[]): string {
   if (finish) parts.push(`- **finish reason**: ${finish}`);
   if (usage) parts.push(`- **usage**: ${JSON.stringify(usage)}`);
   if (parts.length) parts.push("");
+  if (thinking) parts.push(thinkingBlock(thinking));
   if (text) parts.push(["<assistant-text>", "", text, "", "</assistant-text>"].join("\n"));
   for (const idx of Object.keys(toolCalls).map(Number).sort((a, b) => a - b)) {
     const tc = toolCalls[idx];

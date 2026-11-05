@@ -73,7 +73,7 @@ and every request the upstream saw), `timeoutMs`.
 
 `install` returns `{ skip: reason }` when the agent cannot be installed here
 (no network, no `python3`). A plain run reports the skip and passes, and
-`--strict` fails on it. Use `npmTool` or `pipTool` from `install.ts`.
+`--strict` fails on it. Mistral Vibe's recipe needs `python3` with `venv`. Use `npmTool` or `pipTool` from `install.ts`.
 
 Every catalogue entry needs a recipe, or a line in `NO_RECIPE`
 (`recipes/index.ts`) saying why it cannot have one. `coverage.test.ts`
@@ -83,7 +83,7 @@ enforces this in the unit suite.
 
 | Entry | Status |
 | --- | --- |
-| `claude-code/anthropic`, `codex/openai`, `opencode/anthropic`, `opencode/openai`, `pi/anthropic`, `pi/openai` | recipe, passes |
+| `claude-code/anthropic`, `codex/openai`, `opencode/anthropic`, `opencode/openai`, `pi/anthropic`, `pi/openai`, `mistral-vibe/mistral` | recipe, passes |
 | `claude-code/vertex` | recipe written, not registered: the call arrives on `/projects/…` without `/v1`, which real Vertex 404s |
 | `codex/chatgpt`, `pi/codex`, `copilot/github`, `gemini/google-login` | need a real login |
 | `gemini/api-key`, `antigravity/api-key` | the fake has no Gemini shape yet |

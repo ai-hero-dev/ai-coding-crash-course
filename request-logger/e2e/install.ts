@@ -69,6 +69,16 @@ export async function npmTool(
 }
 
 /** `pip install <pkg>==<version>` into a venv at e2e/.tools/<dir>. */
+/** Whether `python` starts at all. */
+async function runs(python: string): Promise<boolean> {
+  try {
+    await run(python, ["-c", ""]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function pipTool(
   dir: string,
   pkg: string,
@@ -76,6 +86,7 @@ export async function pipTool(
 ): Promise<InstallResult> {
   const venv = path.join(TOOLS_DIR, dir);
   const binDir = path.join(venv, "bin");
+  const python = path.join(binDir, "python");
   if (process.platform === "win32")
     return { skip: "the pip recipes assume a POSIX venv layout" };
   try {
@@ -84,18 +95,21 @@ export async function pipTool(
     return { skip: "python3 with venv and ensurepip is not available" };
   }
   try {
-    const { stdout } = await run(path.join(binDir, "pip"), ["show", pkg]);
+    const { stdout } = await run(python, ["-m", "pip", "show", pkg]);
     if (stdout.includes(`Version: ${version}`)) return { binDir, version };
   } catch {
     // not installed yet
   }
   log(`installing ${pkg}==${version} into ${venv}`);
   try {
-    if (!fs.existsSync(path.join(binDir, "pip")))
-      await run("python3", ["-m", "venv", venv]);
+    // A venv restored from a cache can outlive the Python it was built
+    // with (its interpreter link then dangles): rebuild it when its own
+    // python cannot run, instead of trusting that bin/pip exists.
+    if (!(await runs(python)))
+      await run("python3", ["-m", "venv", "--clear", venv]);
     await run(
-      path.join(binDir, "pip"),
-      ["install", "--quiet", `${pkg}==${version}`],
+      python,
+      ["-m", "pip", "install", "--quiet", `${pkg}==${version}`],
       {
         maxBuffer: 64 * 1024 * 1024,
       }
