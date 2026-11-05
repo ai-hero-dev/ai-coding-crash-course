@@ -10,8 +10,7 @@
  * was skipped. A failed run's scratch folder is kept and printed.
  */
 
-import fs from "node:fs";
-import { log, runRecipe } from "./driver";
+import { log, removeScratch, runRecipe } from "./driver";
 import { NO_RECIPE, RECIPES } from "./recipes";
 
 async function main(): Promise<void> {
@@ -41,7 +40,7 @@ async function main(): Promise<void> {
         console.log(`  ${c.ok ? "PASS" : "FAIL"}  ${c.name}`);
       const failed = result.checks.filter((c) => !c.ok);
       if (failed.length === 0) {
-        fs.rmSync(result.scratch, { recursive: true, force: true });
+        removeScratch(result.scratch);
         summary.push([
           recipe.name,
           "PASS",

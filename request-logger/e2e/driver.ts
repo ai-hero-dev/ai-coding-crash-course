@@ -245,6 +245,24 @@ function runAgent(opts: {
   });
 }
 
+/**
+ * Delete a scratch folder. Some agents (Mistral Vibe) leave read-only files
+ * and folders behind, so write permission is restored first.
+ */
+export function removeScratch(dir: string): void {
+  const restore = (p: string) => {
+    const stat = fs.lstatSync(p);
+    if (stat.isSymbolicLink()) return;
+    fs.chmodSync(p, stat.mode | 0o700);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(p)) restore(path.join(p, entry));
+    }
+  };
+  if (!fs.existsSync(dir)) return;
+  restore(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // ---------------------------------------------------------------------------
 // One run
 // ---------------------------------------------------------------------------
