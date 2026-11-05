@@ -39,6 +39,9 @@ export const NO_RECIPE: Record<string, string> = {
   "gemini/api-key": "the fake upstream has no Gemini shape yet.",
   "antigravity/api-key":
     "the fake upstream has no Gemini shape yet, and agy is not on npm.",
+  "grok/xai":
+    "grok.ts is written but not run yet: verifying it needs the x.ai binary downloaded and executed, " +
+    "which was not permitted on 2026-11-05. Register it once it passes.",
   junie:
     "Junie CLI is closed source and is not installable headlessly for free.",
 };
