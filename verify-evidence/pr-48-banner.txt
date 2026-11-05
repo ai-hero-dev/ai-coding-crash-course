@@ -1,0 +1,10 @@
+custom-target | junie --model custom:request-logger
+~/.junie/models/request-logger.json
+{
+  "baseUrl": "http://localhost:8787/v1/messages",
+  "id": "e2e-fake-model",
+  "apiType": "Anthropic",
+  "extraHeaders": {
+    "x-api-key": "${ANTHROPIC_API_KEY}"
+  }
+}
