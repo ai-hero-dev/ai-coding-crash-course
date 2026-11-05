@@ -68,7 +68,8 @@ export const codex: Recipe = {
 Register it in `recipes/index.ts`. Optional fields: `chat` (the
 chat/completions shape), `files` (extra files in the scratch `HOME`),
 `sendsKey: false` (a route with no credential at all, which turns the key
-checks off), `timeoutMs`.
+checks off), `extraChecks` (checks only this agent needs, given the capture
+and every request the upstream saw), `timeoutMs`.
 
 `install` returns `{ skip: reason }` when the agent cannot be installed here
 (no network, no `python3`). A plain run reports the skip and passes, and

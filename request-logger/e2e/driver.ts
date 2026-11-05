@@ -86,6 +86,8 @@ export interface Recipe {
    * Say why next to it. Default true.
    */
   sendsKey?: boolean;
+  /** Checks only this agent needs, run after the shared ones. */
+  extraChecks?(run: { capture: string; seen: SeenRequest[] }): Check[];
   /** Default 120s. */
   timeoutMs?: number;
 }
@@ -400,6 +402,7 @@ export async function runRecipe(
         name: "the student's own .agent-choice.json and logs/ are untouched",
         ok: studentState() === before,
       },
+      ...(recipe.extraChecks?.({ capture: turn, seen: upstream.seen }) ?? []),
     ];
     if (!checks.find((c) => c.name.startsWith("the agent exited"))!.ok) {
       log(`agent output:\n${agentOutput.slice(-4000)}`);
