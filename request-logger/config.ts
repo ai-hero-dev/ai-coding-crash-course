@@ -11,7 +11,8 @@
  * entry to re-derive from — the student typed it — so for that choice only,
  * the base URL and wire format are saved alongside the agent and provider.
  * OpenCode's custom OpenAI-compatible route, and every one of Pi's custom
- * routes, also save their selected model. Every other choice keeps behaving
+ * routes, also save their selected model. Claude Code on Vertex AI saves the
+ * region it forwards to. Every other choice keeps behaving
  * exactly as described above.
  *
  * This is glue, not logic. The decisions all live in agents.ts, which is where
@@ -27,8 +28,10 @@ import {
   CUSTOM_LABEL,
   customTargetNeedsModel,
   listAgents,
+  normalizeVertexRegion,
   OTHER_ID,
   OTHER_LABEL,
+  providerNeedsRegion,
   WIRE_FORMAT_OPTIONS,
   type AgentChoice,
   type RendererId,
@@ -72,6 +75,8 @@ export function loadChoice(file: string): AgentChoice | null {
           : undefined,
       customModel:
         typeof parsed.customModel === "string" ? parsed.customModel : undefined,
+      // Asked for Claude Code on Vertex AI only: the host depends on it.
+      region: typeof parsed.region === "string" ? parsed.region : undefined,
     };
   } catch {
     return null;
@@ -159,6 +164,31 @@ async function askCustomTarget(): Promise<{
   );
 
   return { baseUrl: baseUrl.trim(), renderer };
+}
+
+/**
+ * Ask which Vertex AI region to forward to. Free text, because the list of
+ * regions is long and changes; normalizeVertexRegion rejects anything that
+ * could not be a host label.
+ */
+async function askVertexRegion(): Promise<string> {
+  const region = stopIfCancelled(
+    await text({
+      message:
+        "Which Vertex AI region do you use?\n" +
+        styleText(
+          "dim",
+          "  Must match the CLOUD_ML_REGION you run Claude Code with."
+        ),
+      placeholder: "global (or eu, us, us-east5, ...)",
+      defaultValue: "global",
+      validate: (value) =>
+        normalizeVertexRegion(value) === undefined
+          ? 'Use "global", a multi-region ("eu", "us") or a region like "us-east5".'
+          : undefined,
+    })
+  );
+  return normalizeVertexRegion(region) ?? "global";
 }
 
 async function askModelIdManually(): Promise<string> {
@@ -302,7 +332,13 @@ export async function askChoice(options: AskOptions): Promise<WizardAnswer> {
           : undefined,
       };
     } else {
-      choice = { agent: agentId, provider: providerId };
+      choice = {
+        agent: agentId,
+        provider: providerId,
+        ...(providerNeedsRegion(agentId, providerId)
+          ? { region: await askVertexRegion() }
+          : {}),
+      };
     }
   }
 
