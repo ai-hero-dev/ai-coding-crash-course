@@ -40,7 +40,7 @@ export const NO_RECIPE: Record<string, string> = {
   "antigravity/api-key":
     "the fake upstream has no Gemini shape yet, and agy is not on npm.",
   junie:
-    "junie.ts is written but not run yet: Junie (closed source) installs headlessly from npm, " +
-    "but executing its binary was not permitted on 2026-11-05. Its one-shot run may also need " +
-    "a tool-call reply shape (answer_to_chat) the fake does not have. Register it once it passes.",
+    "junie.ts was run once on 2026-11-05 (3110.7.0): the profile was written right, but no request " +
+    "reached the proxy and Junie printed its built-in model list, likely because the one-shot command " +
+    "does not select the request-logger profile. A second run to confirm was not permitted.",
 };
