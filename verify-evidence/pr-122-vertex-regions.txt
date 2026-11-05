@@ -1,0 +1,30 @@
+[e2e] proxy on :46667 -> fake upstream http://127.0.0.1:40195
+[e2e] wizard printed: ANTHROPIC_VERTEX_BASE_URL=http://localhost:46667 ENABLE_TOOL_SEARCH=true claude
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+region=eu command=ANTHROPIC_VERTEX_BASE_URL=http://localhost:46667 ENABLE_TOOL_SEARCH=true claude
+  upstream saw: POST /v1/projects/e2e-project/locations/eu/publishers/anthropic/models/claude-opus-5-5:streamRawPredict -> anthropic
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/projects\/[^/]+\/locations\/eu\/publishers\/anthropic\/models\/[^/]+:streamRawPredict$/
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+[e2e] proxy on :36631 -> fake upstream http://127.0.0.1:46691
+[e2e] wizard printed: ANTHROPIC_VERTEX_BASE_URL=http://localhost:36631 ENABLE_TOOL_SEARCH=true claude
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+region=us-east5 command=ANTHROPIC_VERTEX_BASE_URL=http://localhost:36631 ENABLE_TOOL_SEARCH=true claude
+  upstream saw: POST /v1/projects/e2e-project/locations/us-east5/publishers/anthropic/models/claude-opus-5-5:streamRawPredict -> anthropic
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/projects\/[^/]+\/locations\/us-east5\/publishers\/anthropic\/models\/[^/]+:streamRawPredict$/
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched

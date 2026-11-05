@@ -1,0 +1,13 @@
+# PR #122 verify tip 6a7ab05 (rebased on origin/request-logger/e2e-seams@fe9fe39)
+$ npx vitest run
+
+ Test Files  19 passed (19)
+      Tests  608 passed (608)
+   Start at  12:40:36
+   Duration  1.48s (transform 807ms, setup 0ms, collect 4.97s, tests 1.98s, environment 6ms, prepare 1.22s)
+
+$ npm run typecheck
+exit 0
+> typecheck
+> react-router typegen && tsc
+

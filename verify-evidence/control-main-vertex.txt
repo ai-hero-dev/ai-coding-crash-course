@@ -1,0 +1,15 @@
+[e2e] proxy on :41609 -> fake upstream http://127.0.0.1:34447
+[e2e] wizard printed: ANTHROPIC_VERTEX_BASE_URL=http://localhost:41609 ENABLE_TOOL_SEARCH=true claude
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+region=global command=ANTHROPIC_VERTEX_BASE_URL=http://localhost:41609 ENABLE_TOOL_SEARCH=true claude
+  upstream saw: POST /projects/e2e-project/locations/global/publishers/anthropic/models/claude-opus-5-5:streamRawPredict -> anthropic
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  FAIL  the model call reached the upstream on /^\/v1\/projects\/[^/]+\/locations\/global\/publishers\/anthropic\/models\/[^/]+:streamRawPredict$/
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  (not streamed) the reply is in the capture
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
