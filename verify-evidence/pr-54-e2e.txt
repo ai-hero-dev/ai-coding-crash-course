@@ -1,0 +1,133 @@
+# PR #54 at eb1f197
+$ npm run request-logger:e2e -- --strict
+
+> request-logger:e2e
+> tsx request-logger/e2e/run.ts --strict
+
+
+[e2e] === claude-code/anthropic
+[e2e] using claude-code/anthropic 2.1.318
+[e2e] proxy on :40247 -> fake upstream http://127.0.0.1:46787
+[e2e] wizard printed: ANTHROPIC_BASE_URL=http://localhost:40247 ENABLE_TOOL_SEARCH=true claude
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/messages$/
+  PASS  the dummy key reached the upstream, so auth passes through
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the capture redacts the key header
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+
+[e2e] === codex/openai
+[e2e] using codex/openai 0.166.0
+[e2e] proxy on :36615 -> fake upstream http://127.0.0.1:41781
+[e2e] wizard printed: codex -c 'openai_base_url="http://localhost:36615/v1"'
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/responses$/
+  PASS  the dummy key reached the upstream, so auth passes through
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the capture redacts the key header
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+
+[e2e] === opencode/anthropic
+[e2e] using opencode/anthropic 1.19.5
+[e2e] proxy on :41713 -> fake upstream http://127.0.0.1:43927
+[e2e] wizard printed: ANTHROPIC_BASE_URL=http://localhost:41713/v1 opencode
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/messages$/
+  PASS  the dummy key reached the upstream, so auth passes through
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the capture redacts the key header
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+
+[e2e] === opencode/openai
+[e2e] using opencode/openai 1.19.5
+[e2e] proxy on :42873 -> fake upstream http://127.0.0.1:37329
+[e2e] wizard printed: OPENAI_BASE_URL=http://localhost:42873/v1 opencode
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/(responses|chat\/completions)$/
+  PASS  the dummy key reached the upstream, so auth passes through
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the capture redacts the key header
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+
+[e2e] === pi/anthropic
+[e2e] using pi/anthropic 0.73.1
+[e2e] proxy on :44759 -> fake upstream http://127.0.0.1:39495
+[e2e] wizard printed: pi
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/messages$/
+  PASS  the dummy key reached the upstream, so auth passes through
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the capture redacts the key header
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+
+[e2e] === pi/openai
+[e2e] using pi/openai 0.73.1
+[e2e] proxy on :43619 -> fake upstream http://127.0.0.1:34717
+[e2e] wizard printed: pi
+[e2e] agent exited 0; stdout: CANNED-REPLY-FROM-FAKE-UPSTREAM
+  PASS  the banner printed the command resolveChoice builds for this entry
+  PASS  the banner printed every setup file it asked for
+  PASS  the agent exited 0
+  PASS  the agent printed the canned reply
+  PASS  the model call reached the upstream on /^\/v1\/(responses|chat\/completions)$/
+  PASS  the dummy key reached the upstream, so auth passes through
+  PASS  a readable capture shows the prompt (request logged)
+  PASS  that capture shows the canned reply (response logged)
+  PASS  the streamed reply is reassembled into <assistant-text>
+  PASS  the capture redacts the key header
+  PASS  the dummy key appears in no log file
+  PASS  the student's own .agent-choice.json and logs/ are untouched
+
+[e2e] summary
+  PASS  claude-code/anthropic  (2.1.318, 12 checks)
+  PASS  codex/openai  (0.166.0, 12 checks)
+  PASS  opencode/anthropic  (1.19.5, 12 checks)
+  PASS  opencode/openai  (1.19.5, 12 checks)
+  PASS  pi/anthropic  (0.73.1, 12 checks)
+  PASS  pi/openai  (0.73.1, 12 checks)
+  ----  claude-code/vertex  (no recipe: claudeCodeVertex (claude-code.ts) is written but fails: this entry forwards to /projects/… with no /v1, which real Vertex 404s. Register it with the fix (#122).)
+  ----  codex/chatgpt  (no recipe: the ChatGPT route needs a real ChatGPT login (~/.codex/auth.json).)
+  ----  copilot/github  (no recipe: Copilot CLI needs a real GitHub login before it sends anything.)
+  ----  pi/codex  (no recipe: the ChatGPT route needs a real ChatGPT login.)
+  ----  omp  (no recipe: not yet written: OMP is alwaysCustom, so it needs a custom-target recipe.)
+  ----  gemini/google-login  (no recipe: the free Google login needs a real Google account.)
+  ----  gemini/api-key  (no recipe: the fake upstream has no Gemini shape yet.)
+  ----  antigravity/api-key  (no recipe: the fake upstream has no Gemini shape yet, and agy is not on npm.)
+  ----  grok/xai  (no recipe: grok.ts is written but not run yet: verifying it needs the x.ai binary downloaded and executed, which was not permitted on 2026-11-05. Register it once it passes.)
+  ----  junie  (no recipe: Junie CLI is closed source and is not installable headlessly for free.)
+exit 0
