@@ -324,8 +324,10 @@ const OMP_NOTE =
  * glance, correctly authenticated. Confirmed against a live proxy: removing
  * the header here is what fixed it, so nothing here should re-add it.
  *
- * `authHeaderValue` is a placeholder line, not a real credential — see
- * JUNIE_NOTE.
+ * `authHeaderValue` is an environment reference (`${ANTHROPIC_API_KEY}`),
+ * never a credential: Junie resolves `${VAR}` in `extraHeaders` when it
+ * loads the profile (JetBrains' Custom LLM models docs), so the key stays
+ * in the student's environment and out of the file. See JUNIE_NOTE.
  *
  * `id` is not a label for this tool — Junie sends it verbatim as the
  * `model` field of every request it makes on this profile. An earlier
@@ -362,16 +364,17 @@ function junieModelConfig(
 const JUNIE_NOTE =
   "Junie has no existing login for this tool to pass through the way Claude " +
   "Code or Codex do. This model profile bypasses JetBrains AI authentication " +
-  "entirely, so a real API key for whichever backend you are logging goes " +
-  "straight into the file in plaintext. Do not commit it.";
+  "and reads your key from the environment: set ANTHROPIC_API_KEY (or " +
+  "OPENAI_API_KEY) before you run Junie. If it is unset, Junie refuses to " +
+  "load the profile and names the missing variable.";
 
 const JUNIE_PROXY_DOES_NOT_WORK_NOTE =
-  "Junie's docs also describe a \"proxies\" entry in ~/.junie/config.json " +
-  "for this. Do not use it instead of the file below: verified against a " +
+  'Junie\'s docs also describe a "proxies" entry in ~/.junie/config.json ' +
+  "for this. Do not use it instead of the file above: verified against a " +
   "real Junie CLI install (build 1543.24), that config is never consulted " +
   "— Junie keeps using its normal authenticated backend no matter what " +
   "`kind` is set to, with no error and an empty logs folder. The model " +
-  "profile below is the mechanism that was actually driven end to end.";
+  "profile above is the mechanism that was actually driven end to end.";
 
 /**
  * Antigravity CLI (`agy`) is a separate Google product from Gemini CLI — a
@@ -843,7 +846,7 @@ const AGENTS: AgentEntry[] = [
             "{model}",
             "Anthropic",
             "x-api-key",
-            "YOUR_ANTHROPIC_API_KEY"
+            "${ANTHROPIC_API_KEY}"
           ),
         ],
         notes: [JUNIE_NOTE, JUNIE_PROXY_DOES_NOT_WORK_NOTE],
@@ -869,7 +872,7 @@ const AGENTS: AgentEntry[] = [
             "{model}",
             "OpenAICompletion",
             "Authorization",
-            "Bearer YOUR_OPENAI_API_KEY"
+            "Bearer ${OPENAI_API_KEY}"
           ),
         ],
         notes: [JUNIE_NOTE, JUNIE_PROXY_DOES_NOT_WORK_NOTE],
@@ -1339,7 +1342,10 @@ function resolveCustomTarget(
   // customTargetNeedsModel and junieModelConfig for why.
   let model: string | undefined;
   if (customTargetNeedsModel(agent.id, renderer)) {
-    const modelResult = resolveCustomModel(choice, `${agent.label}'s custom target`);
+    const modelResult = resolveCustomModel(
+      choice,
+      `${agent.label}'s custom target`
+    );
     if (modelResult.kind === "error") return modelResult;
     model = modelResult.model;
   }

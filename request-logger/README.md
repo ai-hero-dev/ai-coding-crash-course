@@ -119,7 +119,7 @@ from this table. It is here so you can see what is supported before you start.
 | OMP             | Yes   | A YAML config file. Point it at any backend.                                             |
 | Gemini CLI      | Yes   | One command. The free Google login works.                                                |
 | Antigravity CLI | Yes   | A config file and a real Gemini API key — see below.                                     |
-| Junie           | Yes   | A config file, and a real API key pasted in — see below.                                 |
+| Junie           | Yes   | A config file. Your API key stays in the environment — see below.                        |
 | Cursor CLI      | No    | Nothing can make it work. See below.                                                     |
 | Amp             | No    | Nothing can make it work. See below.                                                     |
 
@@ -197,11 +197,12 @@ end to end, with a real proxy in front of it, on both wire formats.
 
 Junie is the one agent here with no existing login for this tool to pass
 through. Its custom-model mechanism bypasses JetBrains AI authentication
-entirely, so the printed profile carries a placeholder header line and you
-paste in a real API key yourself — an Anthropic key on the
-Anthropic-compatible route, an OpenAI key on the OpenAI-compatible one.
-Treat that file the way you would any other file holding a real key: do not
-commit it.
+entirely, so the printed profile's header reads your key from the
+environment — `${ANTHROPIC_API_KEY}` on the Anthropic-compatible route,
+`Bearer ${OPENAI_API_KEY}` on the OpenAI-compatible one. Junie resolves
+those references when it loads the profile (JetBrains' Custom LLM models
+docs), so the key never goes into the file. Set the variable before you run
+Junie; if it is unset, Junie refuses to load the profile.
 
 ### Why Cursor and Amp cannot work
 

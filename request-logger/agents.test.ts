@@ -1642,9 +1642,9 @@ describe("resolveChoice — Junie", () => {
       customRenderer: "anthropic",
       customModel: "claude-sonnet-4-5",
     });
-    expect(
-      result.notes.some((note) => note.includes("never consulted"))
-    ).toBe(true);
+    expect(result.notes.some((note) => note.includes("never consulted"))).toBe(
+      true
+    );
   });
 
   it("still resolves Junie even when the saved provider field is stale", () => {
