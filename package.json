@@ -11,6 +11,7 @@
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "request-logger": "tsx request-logger/proxy.ts",
+    "request-logger:e2e": "tsx request-logger/e2e/run.ts",
     "typecheck": "react-router typegen && tsc",
     "test": "vitest run",
     "test:watch": "vitest",

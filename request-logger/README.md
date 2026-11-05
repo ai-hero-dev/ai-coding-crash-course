@@ -355,6 +355,12 @@ Be fair to the tool when you judge a failure.
   authentication and the `GOOGLE_GEMINI_BASE_URL` variable), not against real
   source or a real install, and its account sign-in route was not verified
   at all — see "Antigravity CLI" above for why that route is left out.
+- **Six entries are driven end to end in CI, against a fake upstream.**
+  `npm run request-logger:e2e` installs pinned releases of Claude Code,
+  Codex, OpenCode and Pi, runs the real proxy and the exact command it
+  prints, and checks the capture. That covers each of their API-key routes
+  (see `e2e/README.md`). It proves the routing, the suffix and the capture,
+  not that the real host accepts the request.
 - **A custom base URL is only as tested as the agent it is attached to.** The
   base URL and wire format mechanism itself is tested directly (see
   `agents.test.ts`); a specific third-party server behind it has not
@@ -371,6 +377,9 @@ If one of them is wrong, it is worth reporting, and the fix is likely to be one
 line in `agents.ts`.
 
 ## Extending it
+
+Adding an agent has a checklist, including the e2e recipe every new entry
+needs: see [`ADDING_AN_AGENT.md`](./ADDING_AN_AGENT.md).
 
 - **Add an agent:** add one entry to the catalogue in `agents.ts`, giving its
   upstream host, its renderer, its base URL suffix, and its command. That is the
