@@ -56,12 +56,12 @@ A recipe (`recipes/<agent>.ts`) holds only what is particular to one agent:
 
 ```ts
 export const codex: Recipe = {
-  name: "codex/openai",                          // "<agent>/<provider>", or "<agent>" if alwaysCustom
+  name: "codex/openai", // "<agent>/<provider>", or "<agent>" if alwaysCustom
   choice: { agent: "codex", provider: "openai" }, // what the wizard would save
   install: () => npmTool("codex", "@openai/codex", "0.166.0"), // pinned
-  env: ({ key }) => ({ OPENAI_API_KEY: key }),   // the dummy key, telemetry off
+  env: ({ key }) => ({ OPENAI_API_KEY: key }), // the dummy key, telemetry off
   promptArgs: (prompt) => ["exec", "--skip-git-repo-check", prompt], // one prompt, then exit
-  modelPath: /^\/v1\/responses$/,                // the path the real host serves
+  modelPath: /^\/v1\/responses$/, // the path the real host serves
 };
 ```
 
@@ -81,10 +81,9 @@ enforces this in the unit suite.
 
 ## As of this commit
 
-| Entry | Status |
-| --- | --- |
-| `claude-code/anthropic`, `codex/openai`, `opencode/anthropic`, `opencode/openai`, `pi/anthropic`, `pi/openai` | recipe, passes |
-| `claude-code/vertex` | recipe written, not registered: the call arrives on `/projects/…` without `/v1`, which real Vertex 404s |
-| `codex/chatgpt`, `pi/codex`, `copilot/github`, `gemini/google-login` | need a real login |
-| `gemini/api-key`, `antigravity/api-key` | the fake has no Gemini shape yet |
-| `omp`, `junie` | see `NO_RECIPE` |
+| Entry                                                                                                                                        | Status                           |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `claude-code/anthropic`, `claude-code/vertex` (global), `codex/openai`, `opencode/anthropic`, `opencode/openai`, `pi/anthropic`, `pi/openai` | recipe, passes                   |
+| `codex/chatgpt`, `pi/codex`, `copilot/github`, `gemini/google-login`                                                                         | need a real login                |
+| `gemini/api-key`, `antigravity/api-key`                                                                                                      | the fake has no Gemini shape yet |
+| `omp`, `junie`                                                                                                                               | see `NO_RECIPE`                  |

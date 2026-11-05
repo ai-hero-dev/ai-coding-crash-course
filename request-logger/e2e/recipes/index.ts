@@ -7,13 +7,14 @@
  */
 
 import type { Recipe } from "../driver";
-import { claudeCode } from "./claude-code";
+import { claudeCode, claudeCodeVertex } from "./claude-code";
 import { codex } from "./codex";
 import { opencode, opencodeOpenAI } from "./opencode";
 import { pi, piOpenAI } from "./pi";
 
 export const RECIPES: Recipe[] = [
   claudeCode,
+  claudeCodeVertex,
   codex,
   opencode,
   opencodeOpenAI,
@@ -26,9 +27,6 @@ export const RECIPES: Recipe[] = [
  * alwaysCustom agent. Refused agents (Cursor, Amp) need no entry.
  */
 export const NO_RECIPE: Record<string, string> = {
-  "claude-code/vertex":
-    "claudeCodeVertex (claude-code.ts) is written but fails: this entry forwards to /projects/… " +
-    "with no /v1, which real Vertex 404s. Register it with the fix (#122).",
   "codex/chatgpt":
     "the ChatGPT route needs a real ChatGPT login (~/.codex/auth.json).",
   "copilot/github":
