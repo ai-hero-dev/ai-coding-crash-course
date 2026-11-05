@@ -40,5 +40,7 @@ export const NO_RECIPE: Record<string, string> = {
   "antigravity/api-key":
     "the fake upstream has no Gemini shape yet, and agy is not on npm.",
   junie:
-    "Junie CLI is closed source and is not installable headlessly for free.",
+    "junie.ts is written but not run yet: Junie (closed source) installs headlessly from npm, " +
+    "but executing its binary was not permitted on 2026-11-05. Its one-shot run may also need " +
+    "a tool-call reply shape (answer_to_chat) the fake does not have. Register it once it passes.",
 };
