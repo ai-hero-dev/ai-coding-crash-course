@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
 import {
+  rendererForPath,
   resolveChoice,
   shouldLogRequest,
   type AgentChoice,
@@ -402,8 +403,9 @@ let burstState: BurstState | null = null;
 
 function writeCapture(c: Capture): void {
   const label = c.target.agentLabel;
+  const renderer = rendererForPath(c.target, c.path);
 
-  if (!shouldLogRequest(c.method, c.path, c.target.renderer)) {
+  if (!shouldLogRequest(c.method, c.path, renderer)) {
     console.log(
       dim(
         `[request-logger] ${label}  ${c.method} ${c.path} -> ${c.statusCode}  (housekeeping, not logged)`
@@ -463,7 +465,7 @@ function writeCapture(c: Capture): void {
       path.join(LOG_DIR, `${c.base}.md`),
       renderMarkdown({
         agent: label,
-        renderer: c.target.renderer,
+        renderer,
         timestamp: c.timestamp,
         method: c.method,
         path: c.path,
