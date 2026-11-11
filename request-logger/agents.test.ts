@@ -171,6 +171,7 @@ describe("listProviders", () => {
       "anthropic",
       "vertex",
       "bedrock",
+      "bedrock-api-key",
     ]);
   });
 

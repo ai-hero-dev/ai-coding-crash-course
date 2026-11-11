@@ -562,8 +562,20 @@ export function bedrockUpstream(
           : profile
             ? `AWS profile "${profile}" (AWS_PROFILE), via the AWS CLI.`
             : "your default AWS credentials, via the AWS CLI."),
+      ...(env.AWS_BEARER_TOKEN_BEDROCK
+        ? [
+            "You have a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK). Run with " +
+              "--force and pick Amazon Bedrock (API key).",
+          ]
+        : []),
     ],
   };
+}
+
+/** Same host; the API key passes through as a Bearer header, so no signing. */
+function bedrockApiKeyUpstream(choice: AgentChoice, env: NodeJS.ProcessEnv) {
+  const up = bedrockUpstream(choice, env);
+  return "error" in up ? up : { host: up.host };
 }
 
 /**
@@ -646,7 +658,7 @@ const AGENTS: AgentEntry[] = [
       },
       {
         id: "bedrock",
-        label: "Amazon Bedrock",
+        label: "Amazon Bedrock (AWS credentials)",
         upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
         resolveUpstream: bedrockUpstream,
         // Messages API body, model in the URL. Docs: https://code.claude.com/docs/en/amazon-bedrock
@@ -662,6 +674,22 @@ const AGENTS: AgentEntry[] = [
             "ANTHROPIC_BASE_URL.",
           "request-logger signs requests with your AWS credentials, so run it " +
             "with the same AWS_PROFILE and AWS_REGION as Claude Code.",
+        ],
+      },
+      {
+        id: "bedrock-api-key",
+        label: "Amazon Bedrock (API key)",
+        upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
+        resolveUpstream: bedrockApiKeyUpstream,
+        renderer: "anthropic",
+        env: [
+          ["ANTHROPIC_BEDROCK_BASE_URL", "{baseUrl}"],
+          ["ENABLE_TOOL_SEARCH", "true"],
+        ],
+        bin: "claude",
+        notes: [
+          "Assumes CLAUDE_CODE_USE_BEDROCK=1 and AWS_BEARER_TOKEN_BEDROCK are " +
+            "set. Do not set CLAUDE_CODE_SKIP_BEDROCK_AUTH: it drops the key.",
         ],
       },
     ],

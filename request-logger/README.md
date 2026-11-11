@@ -125,10 +125,13 @@ and Amp.
 
 ### Claude Code on Amazon Bedrock
 
-If `CLAUDE_CODE_USE_BEDROCK=1` is set, pick **Amazon Bedrock**. Claude Code
+If `CLAUDE_CODE_USE_BEDROCK=1` is set, pick **Amazon Bedrock (AWS credentials)**. Claude Code
 then sends requests unsigned and request-logger signs them with your AWS
 credentials (`AWS_PROFILE`, via the AWS CLI v2), so start it in a shell with
 the same `AWS_PROFILE` and `AWS_REGION` as Claude Code.
+
+With a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`), pick **Amazon Bedrock
+(API key)** instead. The key passes through untouched and nothing is signed.
 
 ### Claude Code on Google Vertex AI
 

@@ -55,6 +55,11 @@ describe("Claude Code on Amazon Bedrock", () => {
     expect(t.command).toContain("$env:CLAUDE_CODE_SKIP_BEDROCK_AUTH = '1'");
   });
 
+  it("points an API-key user at the API-key route", () => {
+    const t = bedrock({ AWS_REGION: "us-east-1", AWS_BEARER_TOKEN_BEDROCK: "k" }) as ResolvedTarget;
+    expect(t.notes.join(" ")).toContain("pick Amazon Bedrock (API key)");
+  });
+
   it("names the profile it will sign with", () => {
     const t = bedrock({ AWS_REGION: "us-east-1", AWS_PROFILE: "AI" }) as ResolvedTarget;
     expect(t.notes.join(" ")).toContain('AWS profile "AI"');
@@ -238,5 +243,25 @@ describe("signedHeaders", () => {
       { port: 8787, platform: "darwin" }
     ) as ResolvedTarget;
     expect(await signedHeaders(other, incoming, "POST", "x", "/", Buffer.alloc(0), env)).toBe(incoming);
+  });
+});
+
+describe("Claude Code on Amazon Bedrock with an API key", () => {
+  const t = resolveChoice(
+    { agent: "claude-code", provider: "bedrock-api-key" },
+    { port: 8787, platform: "darwin", env: { AWS_REGION: "eu-west-1" } }
+  ) as ResolvedTarget;
+
+  it("forwards to the region's host and passes the key through unsigned", async () => {
+    expect(t.upstreamHost).toBe("bedrock-runtime.eu-west-1.amazonaws.com");
+    expect(t.awsSigning).toBeUndefined();
+    const headers = { authorization: "Bearer KEY" };
+    expect(await signedHeaders(t, headers, "POST", t.upstreamHost, "/", Buffer.alloc(0))).toBe(headers);
+  });
+
+  it("never sets the flag that drops the key", () => {
+    expect(t.command).toBe(
+      "ANTHROPIC_BEDROCK_BASE_URL=http://localhost:8787 ENABLE_TOOL_SEARCH=true claude"
+    );
   });
 });
