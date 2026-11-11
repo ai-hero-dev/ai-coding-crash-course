@@ -39,6 +39,7 @@ const REDACT = new Set([
   "x-api-key",
   "api-key",
   "x-goog-api-key",
+  "x-amz-security-token",
 ]);
 
 /**
@@ -125,12 +126,39 @@ export function renderMarkdown(input: RenderInput): string {
   );
 }
 
-/** Most APIs name the model in the body. Gemini names it in the URL. */
+/** Most APIs name the model in the body. Gemini, Vertex and Bedrock name it in the URL. */
 function findModel(reqJson: any, path: string): string {
   if (typeof reqJson?.model === "string") return reqJson.model;
   const fromPath = path.match(/models\/([^:/?]+)/);
   if (fromPath) return fromPath[1];
+  const bedrock = path.match(/^\/model\/([^/?]+)\//);
+  if (bedrock) {
+    try {
+      return decodeURIComponent(bedrock[1]);
+    } catch {
+      return bedrock[1];
+    }
+  }
   return "unknown";
+}
+
+/** Bedrock's binary event stream: each frame's {"bytes":"<base64>"} is one Anthropic SSE event. */
+export function decodeBedrockStream(
+  raw: string
+): { sse: string; errors: string[] } | undefined {
+  if (!raw.includes(":message-type")) return undefined;
+  const events: string[] = [];
+  for (const m of raw.matchAll(/\{"bytes":"([A-Za-z0-9+/=]+)"/g)) {
+    const json = Buffer.from(m[1], "base64").toString("utf8");
+    try {
+      events.push(`event: ${JSON.parse(json).type}\ndata: ${json}\n`);
+    } catch {}
+  }
+  const errors = [...raw.matchAll(/\{"message":("(?:[^"\\]|\\.)*")\}/g)].map(
+    (m) => JSON.parse(m[1]) as string
+  );
+  if (events.length === 0 && errors.length === 0) return undefined;
+  return { sse: events.join("\n"), errors };
 }
 
 function renderMeta(input: RenderInput, model: string): string {
@@ -740,6 +768,11 @@ function renderMessages(
 // ---------------------------------------------------------------------------
 
 function renderResponse(input: RenderInput, reqJson: any): string {
+  const bedrock = decodeBedrockStream(input.responseRaw);
+  if (bedrock) {
+    const body = renderResponse({ ...input, responseRaw: bedrock.sse }, reqJson);
+    return [body, ...bedrock.errors.map((e) => `> **Bedrock stream error:** ${e}`)].join("\n\n");
+  }
   const raw = input.responseRaw;
   if (raw.trim().length === 0) return "_(empty response)_";
 

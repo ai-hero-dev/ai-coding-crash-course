@@ -49,6 +49,11 @@ export interface AgentChoice {
   region?: string;
 }
 
+export interface AwsSigning {
+  region: string;
+  service: string;
+}
+
 export interface ResolvedTarget {
   kind: "target";
   agent: string;
@@ -62,6 +67,8 @@ export interface ResolvedTarget {
    * AI. Absent for a provider whose agent already sends the full path.
    */
   upstreamPathPrefix?: string;
+  /** The proxy signs requests itself (Bedrock). See sigv4.ts. */
+  awsSigning?: AwsSigning;
   renderer: RendererId;
   /** The base URL the student points their agent at, e.g. http://localhost:8787/v1 */
   baseUrl: string;
@@ -191,7 +198,13 @@ interface ProviderEntry {
     choice: AgentChoice,
     env: NodeJS.ProcessEnv
   ) =>
-    { host: string; pathPrefix?: string; notes?: string[] } | { error: string };
+    | {
+        host: string;
+        pathPrefix?: string;
+        notes?: string[];
+        awsSigning?: AwsSigning;
+      }
+    | { error: string };
   renderer: RendererId;
   /**
    * Appended to http://localhost:PORT to make the base URL.
@@ -516,6 +529,43 @@ export function vertexUpstream(
   return { host, pathPrefix: "/v1", notes };
 }
 
+/** Region from AWS_REGION, the variable Claude Code reads too, so nothing is saved. */
+export function bedrockUpstream(
+  _choice: AgentChoice,
+  env: NodeJS.ProcessEnv
+):
+  | { host: string; notes: string[]; awsSigning: AwsSigning }
+  | { error: string } {
+  const raw = (env.AWS_REGION || env.AWS_DEFAULT_REGION || "").trim();
+  if (!raw) {
+    return {
+      error:
+        "Claude Code on Amazon Bedrock needs AWS_REGION, and it is not set in " +
+        "this shell. Export the same AWS_REGION you run Claude Code with " +
+        "(e.g. us-east-1), then start request-logger again.",
+    };
+  }
+  const region = raw.toLowerCase();
+  if (!/^[a-z]{2}(-[a-z]+)+-\d+$/.test(region)) {
+    return {
+      error: `AWS_REGION is "${raw}", which is not an AWS region such as us-east-1.`,
+    };
+  }
+  const profile = env.AWS_PROFILE?.trim();
+  return {
+    host: `bedrock-runtime.${region}.amazonaws.com`,
+    awsSigning: { region, service: "bedrock" },
+    notes: [
+      `Forwarding to Bedrock in "${region}" (AWS_REGION), signing with ` +
+        (env.AWS_ACCESS_KEY_ID
+          ? "the AWS_ACCESS_KEY_ID in this shell."
+          : profile
+            ? `AWS profile "${profile}" (AWS_PROFILE), via the AWS CLI.`
+            : "your default AWS credentials, via the AWS CLI."),
+    ],
+  };
+}
+
 /**
  * Ordered by popularity, decided 2026-08-06. The wizard shows them in this
  * order, so a student is most likely to find theirs first.
@@ -592,6 +642,26 @@ const AGENTS: AgentEntry[] = [
           "ENABLE_TOOL_SEARCH=true matters here for the same reason it does on " +
             "the plain Anthropic route above: a non-default host turns off tool " +
             "search unless this is set.",
+        ],
+      },
+      {
+        id: "bedrock",
+        label: "Amazon Bedrock",
+        upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
+        resolveUpstream: bedrockUpstream,
+        // Messages API body, model in the URL. Docs: https://code.claude.com/docs/en/amazon-bedrock
+        renderer: "anthropic",
+        env: [
+          ["ANTHROPIC_BEDROCK_BASE_URL", "{baseUrl}"],
+          ["CLAUDE_CODE_SKIP_BEDROCK_AUTH", "1"],
+          ["ENABLE_TOOL_SEARCH", "true"],
+        ],
+        bin: "claude",
+        notes: [
+          "Assumes CLAUDE_CODE_USE_BEDROCK=1 is set. Bedrock mode ignores " +
+            "ANTHROPIC_BASE_URL.",
+          "request-logger signs requests with your AWS credentials, so run it " +
+            "with the same AWS_PROFILE and AWS_REGION as Claude Code.",
         ],
       },
     ],
@@ -1485,7 +1555,7 @@ export function resolveChoice(
   options: {
     port: number;
     platform: NodeJS.Platform;
-    /** Read only to flag a CLOUD_ML_REGION that disagrees with the saved region. */
+    /** Vertex's CLOUD_ML_REGION check; Bedrock's AWS_REGION / AWS_PROFILE. */
     env?: NodeJS.ProcessEnv;
   }
 ): Resolution {
@@ -1557,12 +1627,14 @@ export function resolveChoice(
 
   let upstreamHost = provider.upstreamHost;
   let upstreamPathPrefix: string | undefined;
+  let awsSigning: AwsSigning | undefined;
   let extraNotes: string[] = [];
   if (provider.resolveUpstream) {
     const upstream = provider.resolveUpstream(choice, options.env ?? {});
     if ("error" in upstream) return { kind: "error", message: upstream.error };
     upstreamHost = upstream.host;
     upstreamPathPrefix = upstream.pathPrefix;
+    awsSigning = upstream.awsSigning;
     extraNotes = upstream.notes ?? [];
   }
 
@@ -1574,6 +1646,7 @@ export function resolveChoice(
     providerLabel: provider.label,
     upstreamHost,
     ...(upstreamPathPrefix ? { upstreamPathPrefix } : {}),
+    ...(awsSigning ? { awsSigning } : {}),
     renderer: provider.renderer,
     baseUrl,
     command: buildCommand(provider, baseUrl, options.platform),

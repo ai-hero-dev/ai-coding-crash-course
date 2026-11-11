@@ -106,7 +106,7 @@ from this table. It is here so you can see what is supported before you start.
 
 | Agent           | Works | What you need                                                                            |
 | --------------- | ----- | ---------------------------------------------------------------------------------------- |
-| Claude Code     | Yes   | One command. Works with a subscription login, an Anthropic API key, or Google Vertex AI. |
+| Claude Code     | Yes   | One command. Works with a subscription login, an Anthropic API key, Google Vertex AI, or Amazon Bedrock. |
 | Codex           | Yes   | One flag. A subscription or an API key works.                                            |
 | GitHub Copilot  | Yes   | Your normal subscription login.                                                          |
 | OpenCode        | Yes   | One command, or a config file.                                                           |
@@ -122,6 +122,13 @@ from this table. It is here so you can see what is supported before you start.
 Any other provider — a local model server, or a smaller hosted one — works
 through **Custom base URL**, above, on any agent in this table except Cursor
 and Amp.
+
+### Claude Code on Amazon Bedrock
+
+If `CLAUDE_CODE_USE_BEDROCK=1` is set, pick **Amazon Bedrock**. Claude Code
+then sends requests unsigned and request-logger signs them with your AWS
+credentials (`AWS_PROFILE`, via the AWS CLI v2), so start it in a shell with
+the same `AWS_PROFILE` and `AWS_REGION` as Claude Code.
 
 ### Claude Code on Google Vertex AI
 

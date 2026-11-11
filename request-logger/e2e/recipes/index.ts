@@ -29,6 +29,9 @@ export const RECIPES: Recipe[] = [
  * alwaysCustom agent. Refused agents (Cursor, Amp) need no entry.
  */
 export const NO_RECIPE: Record<string, string> = {
+  "claude-code/bedrock":
+    "the fake upstream has no Bedrock shape yet (binary AWS event-stream " +
+    "responses), and the proxy signs with real AWS credentials.",
   "codex/chatgpt":
     "the ChatGPT route needs a real ChatGPT login (~/.codex/auth.json).",
   "copilot/github":
