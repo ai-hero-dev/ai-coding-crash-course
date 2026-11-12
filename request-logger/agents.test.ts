@@ -166,10 +166,12 @@ describe("listProviders", () => {
     expect(listProviders("cursor")).toEqual([]);
   });
 
-  it("returns both Claude Code providers", () => {
+  it("returns every Claude Code provider", () => {
     expect(listProviders("claude-code").map((p) => p.id)).toEqual([
       "anthropic",
       "vertex",
+      "bedrock",
+      "bedrock-api-key",
     ]);
   });
 

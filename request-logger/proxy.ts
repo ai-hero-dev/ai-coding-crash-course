@@ -24,6 +24,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
+import { createCredentialProvider, signRequest } from "./sigv4";
 import {
   resolveChoice,
   shouldLogRequest,
@@ -208,6 +209,41 @@ function forwardHeaders(
   return out;
 }
 
+let awsCredentials: ReturnType<typeof createCredentialProvider> | null = null;
+
+/** Bedrock: drop the agent's own signature, if any, and sign for the real host. */
+export async function signedHeaders(
+  target: ProxyTarget,
+  headers: http.OutgoingHttpHeaders,
+  method: string,
+  hostname: string,
+  upstreamPath: string,
+  body: Buffer,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<http.OutgoingHttpHeaders> {
+  if (target.kind !== "target" || !target.awsSigning) return headers;
+  awsCredentials ??= createCredentialProvider(env);
+  const credentials = await awsCredentials.get();
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const k = key.toLowerCase();
+    if (k === "authorization" || k.startsWith("x-amz-")) continue;
+    out[key] = value;
+  }
+  return {
+    ...out,
+    ...signRequest({
+      method,
+      hostname,
+      path: upstreamPath,
+      body,
+      region: target.awsSigning.region,
+      service: target.awsSigning.service,
+      credentials,
+    }),
+  };
+}
+
 function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -234,6 +270,8 @@ function handle(
     );
 
     const onUpstreamResponse = (upstreamRes: http.IncomingMessage) => {
+      // Picks up refreshed credentials without a restart.
+      if (upstreamRes.statusCode === 403) awsCredentials?.invalidate();
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       const responseChunks: Buffer[] = [];
       upstreamRes.on("data", (chunk: Buffer) => {
@@ -258,21 +296,7 @@ function handle(
       });
     };
 
-    const requestOptions: http.RequestOptions = {
-      hostname,
-      port,
-      path: upstreamPath,
-      method: req.method,
-      headers: {
-        ...forwardHeaders(req.headers, body),
-        host: hostname,
-      },
-    };
-    const upstreamReq = useHttps
-      ? https.request(requestOptions, onUpstreamResponse)
-      : http.request(requestOptions, onUpstreamResponse);
-
-    upstreamReq.on("error", (err) => {
+    const fail = (err: Error) => {
       console.error(`[request-logger] upstream error: ${err.message}`);
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "application/json" });
@@ -282,10 +306,30 @@ function handle(
           error: `request-logger upstream error: ${err.message}`,
         })
       );
-    });
+    };
 
-    if (body.length > 0) upstreamReq.write(body);
-    upstreamReq.end();
+    signedHeaders(
+      target,
+      forwardHeaders(req.headers, body),
+      req.method ?? "POST",
+      hostname,
+      upstreamPath,
+      body
+    ).then((headers) => {
+      const requestOptions: http.RequestOptions = {
+        hostname,
+        port,
+        path: upstreamPath,
+        method: req.method,
+        headers: { ...headers, host: hostname },
+      };
+      const upstreamReq = useHttps
+        ? https.request(requestOptions, onUpstreamResponse)
+        : http.request(requestOptions, onUpstreamResponse);
+      upstreamReq.on("error", fail);
+      if (body.length > 0) upstreamReq.write(body);
+      upstreamReq.end();
+    }, fail);
   });
 }
 
