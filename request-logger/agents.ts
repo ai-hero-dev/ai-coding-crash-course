@@ -63,6 +63,8 @@ export interface ResolvedTarget {
    */
   upstreamPathPrefix?: string;
   renderer: RendererId;
+  /** Per-path exceptions to `renderer`. See rendererForPath. */
+  pathRenderers?: PathRenderer[];
   /** The base URL the student points their agent at, e.g. http://localhost:8787/v1 */
   baseUrl: string;
   /** The copy-pasteable command, complete with env vars and flags. */
@@ -174,6 +176,17 @@ export interface SetupFile {
   language: string;
 }
 
+/**
+ * A request path that one provider sends in a different wire format from the
+ * rest of its traffic. GitHub Copilot is the first: one host, but the wire
+ * format follows the model the student picked.
+ */
+export interface PathRenderer {
+  /** Tested against the request path, query string included. */
+  path: RegExp;
+  renderer: RendererId;
+}
+
 // ---------------------------------------------------------------------------
 // Catalogue
 // ---------------------------------------------------------------------------
@@ -193,6 +206,12 @@ interface ProviderEntry {
   ) =>
     { host: string; pathPrefix?: string; notes?: string[] } | { error: string };
   renderer: RendererId;
+  /**
+   * For a host that speaks more than one wire format: the paths that are not
+   * in `renderer`'s format, and the renderer that reads each. The first match
+   * wins, and any other path falls back to `renderer`. See rendererForPath.
+   */
+  pathRenderers?: PathRenderer[];
   /**
    * Appended to http://localhost:PORT to make the base URL.
    *
@@ -641,6 +660,16 @@ const AGENTS: AgentEntry[] = [
         label: "GitHub subscription",
         upstreamHost: "api.githubcopilot.com",
         renderer: "openai",
+        // Copilot speaks the wire format of the model's own vendor. A Claude
+        // model's turn arrives on /v1/messages in Anthropic's shape (a
+        // top-level `system`, tools with `input_schema`, Anthropic's stream
+        // events). Read with the OpenAI renderer, that call showed no system
+        // prompt, no tool schemas and no reply text. GPT models and background
+        // calls stay on /chat/completions or /responses. Seen in captures from
+        // Copilot CLI 1.0.107.
+        pathRenderers: [
+          { path: /^\/v1\/messages(?:[/?]|$)/, renderer: "anthropic" },
+        ],
         env: [["COPILOT_API_URL", "{baseUrl}"]],
         bin: "copilot",
         notes: [
@@ -1109,6 +1138,18 @@ export function shouldLogRequest(
   return !/count[_-]?tokens/i.test(reqPath);
 }
 
+/**
+ * The renderer for one request. This is the target's own renderer, unless
+ * the request path matches one of the target's `pathRenderers`.
+ */
+export function rendererForPath(
+  target: { renderer: RendererId; pathRenderers?: PathRenderer[] },
+  reqPath: string
+): RendererId {
+  const match = target.pathRenderers?.find((p) => p.path.test(reqPath));
+  return match?.renderer ?? target.renderer;
+}
+
 // ---------------------------------------------------------------------------
 // Resolution — the seam
 // ---------------------------------------------------------------------------
@@ -1575,6 +1616,9 @@ export function resolveChoice(
     upstreamHost,
     ...(upstreamPathPrefix ? { upstreamPathPrefix } : {}),
     renderer: provider.renderer,
+    ...(provider.pathRenderers
+      ? { pathRenderers: provider.pathRenderers }
+      : {}),
     baseUrl,
     command: buildCommand(provider, baseUrl, options.platform),
     setup: (provider.setup ?? []).map((file) => ({

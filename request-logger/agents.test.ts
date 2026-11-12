@@ -9,6 +9,7 @@ import {
   listProviders,
   OTHER_ID,
   providerNeedsRegion,
+  rendererForPath,
   resolveChoice,
   shouldLogRequest,
   type AgentChoice,
@@ -331,6 +332,39 @@ describe("resolveChoice — renderers", () => {
 
   it("reads Copilot with the OpenAI renderer", () => {
     expect(target("copilot").renderer).toBe("openai");
+  });
+
+  it("reads a Copilot turn on a Claude model with the Anthropic renderer, since it arrives in the Messages API shape", () => {
+    expect(rendererForPath(target("copilot"), "/v1/messages")).toBe(
+      "anthropic"
+    );
+    expect(rendererForPath(target("copilot"), "/v1/messages?beta=true")).toBe(
+      "anthropic"
+    );
+  });
+
+  it("keeps Copilot's other calls on the OpenAI renderer", () => {
+    expect(rendererForPath(target("copilot"), "/chat/completions")).toBe(
+      "openai"
+    );
+    expect(rendererForPath(target("copilot"), "/responses")).toBe("openai");
+  });
+
+  it("does not mistake a path that only starts like /v1/messages for one", () => {
+    expect(rendererForPath(target("copilot"), "/v1/messagesx")).toBe("openai");
+  });
+
+  it("still drops Copilot's Claude token counting", () => {
+    const path = "/v1/messages/count_tokens";
+    expect(
+      shouldLogRequest("POST", path, rendererForPath(target("copilot"), path))
+    ).toBe(false);
+  });
+
+  it("uses the target's own renderer when it has no per-path exceptions", () => {
+    expect(rendererForPath(target("codex", "openai"), "/v1/messages")).toBe(
+      "openai"
+    );
   });
 
   it("reads OpenCode on Anthropic with the Anthropic renderer", () => {
