@@ -1,0 +1,32 @@
+{
+	"name": "AI Coding Crash Course",
+	"dockerComposeFile": [
+		"../docker-compose-devcontainer.yml",
+		"docker-compose.yml"
+	],
+	"service": "devcontainer",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+	"initializeCommand": "bash .devcontainer/setup_devcontainer.sh /workspaces/${localWorkspaceFolderBasename}",
+	"postCreateCommand": "bash .devcontainer/postcreate_devcontainer.sh /workspaces/${localWorkspaceFolderBasename}",
+	"forwardPorts": [5173],
+	"portsAttributes": {
+		"5173": {
+			"label": "Vite dev server",
+			"onAutoForward": "notify"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"esbenp.prettier-vscode",
+				"bradlc.vscode-tailwindcss",
+				"ms-azuretools.vscode-containers"
+			],
+			"settings": {
+				"editor.defaultFormatter": "esbenp.prettier-vscode",
+				"editor.formatOnSave": true,
+				"files.insertFinalNewline": true
+			}
+		}
+	}
+}
