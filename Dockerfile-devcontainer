@@ -1,0 +1,41 @@
+FROM node:22.22.1-bookworm-slim
+
+ARG USER_NAME
+ARG USER_SHELL
+ARG USER_ID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME_DIR="/home/${USER_NAME}"
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+USER root
+
+RUN apt-get update \
+	&& apt-get upgrade -y \
+	&& apt-get install -y --no-install-recommends \
+	build-essential \
+	python3 \
+	git \
+	sudo \
+	zsh \
+	bash-completion \
+	openssh-client \
+	ca-certificates \
+	locales \
+	&& sed -i '/en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen \
+	&& locale-gen en_US.UTF-8 \
+	&& export USER_SHELL_WITH_PROPER_PATH="$(which ${USER_SHELL##*/})" \
+	&& if [ -z "${USER_SHELL_WITH_PROPER_PATH}" ]; then export USER_SHELL_WITH_PROPER_PATH="$(which zsh)"; fi \
+	&& usermod -u "${USER_ID}" -l "${USER_NAME}" -d "${HOME_DIR}" -m -s "${USER_SHELL_WITH_PROPER_PATH}" node \
+	&& groupmod -n "${USER_NAME}" node \
+	&& mkdir -p "/etc/sudoers.d" \
+	&& echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" >"/etc/sudoers.d/${USER_NAME}" \
+	&& chmod 0440 "/etc/sudoers.d/${USER_NAME}" \
+	&& chown -R "${USER_NAME}:${USER_NAME}" "${HOME_DIR}" \
+	&& rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+
+COPY --chown=root:root ./.devcontainer/rc_files/.devcontainer_bashrc /etc/skel/.devcontainer_bashrc
+
+USER "${USER_NAME}"
+WORKDIR "${HOME_DIR}"

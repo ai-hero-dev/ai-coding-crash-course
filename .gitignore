@@ -20,6 +20,9 @@
 # VS Code
 .vscode/
 
+# Devcontainer host-specific build args (written by setup_devcontainer.sh)
+.devcontainer/assets
+
 # request-logger captured logs (may contain your own code/prompts)
 /request-logger/logs/*
 !/request-logger/logs/.gitkeep

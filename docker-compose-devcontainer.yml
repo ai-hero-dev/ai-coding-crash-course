@@ -1,0 +1,18 @@
+services:
+  devcontainer:
+    # Image is built on the host in setup_devcontainer.sh (plain `docker build`).
+    # Compose must not declare `build:` — otherwise the Dev Containers CLI injects a
+    # generated Dockerfile under /tmp and Docker Compose 5 / buildx bake fails with
+    # "additional privileges requested: --allow=fs.read=.../Dockerfile-with-features".
+    image: ai-coding-crash-course-devcontainer
+    pull_policy: never
+    restart: unless-stopped
+    volumes:
+      - "${HOME}/.config:/home/${USER}/.config"
+      - "${HOME}/.oh-my-zsh:/home/${USER}/.oh-my-zsh:ro"
+      - "${HOME}/.zshrc:/home/${USER}/.zshrc:ro"
+      - "${HOME}/.bashrc:/home/${USER}/.bashrc:ro"
+      - "${HOME}/.npmrc:/home/${USER}/.npmrc:ro"
+      - "${HOME}/.zsh_history_devcontainer:/home/${USER}/.zsh_history"
+      - "${HOME}/.bash_history_devcontainer:/home/${USER}/.bash_history"
+      - "${HOME}/.cursor:/home/${USER}/.cursor"
