@@ -288,7 +288,9 @@ export function refuseBrowserCaller(
     return `it has an Origin header (${shown(headers.origin)}), so a web page sent it`;
   }
   const host = (headers.host ?? "").toLowerCase();
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].map((h) => `${h}:${port}`);
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].flatMap((h) =>
+    port === 80 ? [h, `${h}:80`] : [`${h}:${port}`]
+  );
   if (!loopback.includes(host)) {
     return `its Host header is ${shown(headers.host)}, not localhost:${port}`;
   }

@@ -1781,6 +1781,14 @@ describe("Claude Code on Amazon Bedrock", () => {
         expect(upstream(claude, { AWS_REGION: "x.evil.com/" })).toHaveProperty("error");
       });
 
+      it("refuses the China and ISO partitions, whose endpoints are not on amazonaws.com", () => {
+        for (const region of ["cn-north-1", "cn-northwest-1", "us-iso-east-1", "us-isob-east-1"]) {
+          expect(upstream(claude, { AWS_REGION: region })).toMatchObject({
+            error: expect.stringContaining("standard AWS regions"),
+          });
+        }
+      });
+
       it("forwards to bedrock-runtime in that region, and falls back to AWS_DEFAULT_REGION", () => {
         expect(upstream(claude, { AWS_REGION: "eu-west-1" })).toMatchObject({
           host: "bedrock-runtime.eu-west-1.amazonaws.com",

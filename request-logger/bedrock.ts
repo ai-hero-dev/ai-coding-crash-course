@@ -156,6 +156,8 @@ export function signRequest(input: SignInput): Record<string, string> {
 
 const EXPIRY_MARGIN_MS = 2 * 60_000;
 const UNDATED_TTL_MS = 5 * 60_000;
+const FAILED_LOAD_RETRY_MS = 10_000;
+const AWS_CLI_TIMEOUT_MS = 30_000;
 const RELOAD_FLOOR_MS = 30_000;
 
 type Exec = (env: NodeJS.ProcessEnv) => Promise<string>;
@@ -165,9 +167,20 @@ const runAwsCli: Exec = (env) =>
     execFile(
       "aws",
       ["configure", "export-credentials", "--format", "process"],
-      { env, timeout: 30_000 },
-      (err, stdout, stderr) =>
-        err ? reject(new Error((stderr || err.message).trim())) : resolve(stdout)
+      { env, timeout: AWS_CLI_TIMEOUT_MS },
+      (err, stdout) => {
+        if (!err) return resolve(stdout);
+        const code = (err as NodeJS.ErrnoException).code;
+        reject(
+          new Error(
+            code === "ENOENT"
+              ? "the aws command is not installed"
+              : err.killed
+                ? `the aws command timed out after ${AWS_CLI_TIMEOUT_MS / 1000}s`
+                : `the aws command exited with code ${code}`
+          )
+        );
+      }
     );
   });
 
@@ -179,6 +192,7 @@ export function createCredentialProvider(
   let cached: { creds: AwsCredentials; validUntil: number; loadedAt: number } | null =
     null;
   let inflight: Promise<AwsCredentials> | null = null;
+  let failed: { error: Error; until: number } | null = null;
 
   async function load(): Promise<AwsCredentials> {
     if (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY) {
@@ -195,8 +209,8 @@ export function createCredentialProvider(
       const profile = env.AWS_PROFILE ? ` for profile "${env.AWS_PROFILE}"` : "";
       throw new Error(
         `could not load AWS credentials${profile} with "aws configure ` +
-          `export-credentials": ${(err as Error).message}. If your SSO session ` +
-          `expired, run "aws sso login" and retry.`
+          `export-credentials": ${(err as Error).message}. Run that command ` +
+          `yourself to see why. If your SSO session expired, run "aws sso login" and retry.`
       );
     }
     let parsed: any;
@@ -221,6 +235,7 @@ export function createCredentialProvider(
   return {
     async get(): Promise<AwsCredentials> {
       if (cached && clock() < cached.validUntil) return cached.creds;
+      if (failed && clock() < failed.until) throw failed.error;
       inflight ??= load()
         .then((creds) => {
           cached = {
@@ -230,7 +245,12 @@ export function createCredentialProvider(
               : clock() + UNDATED_TTL_MS,
             loadedAt: clock(),
           };
+          failed = null;
           return creds;
+        })
+        .catch((error: Error) => {
+          failed = { error, until: clock() + FAILED_LOAD_RETRY_MS };
+          throw error;
         })
         .finally(() => {
           inflight = null;
@@ -295,20 +315,24 @@ export function parseEventStream(
 ):
   | { messages: EventStreamMessage[]; stopped: "cut-off" | "corrupt" | null }
   | undefined {
+  if (buf.length === 0) return undefined;
   const messages: EventStreamMessage[] = [];
   let at = 0;
   let stopped: "cut-off" | "corrupt" | null = null;
   while (at < buf.length) {
-    if (at + 16 > buf.length) {
+    if (at + 12 > buf.length) {
+      if (at === 0) return undefined;
       stopped = "cut-off";
       break;
     }
     const total = buf.readUInt32BE(at);
     const headersLength = buf.readUInt32BE(at + 4);
-    if (
-      buf.readUInt32BE(at + 8) !== crc32(buf.subarray(at, at + 8)) ||
-      total < 16 + headersLength
-    ) {
+    if (buf.readUInt32BE(at + 8) !== crc32(buf.subarray(at, at + 8))) {
+      if (at === 0) return undefined;
+      stopped = "corrupt";
+      break;
+    }
+    if (total < 16 + headersLength) {
       stopped = "corrupt";
       break;
     }
@@ -331,7 +355,6 @@ export function parseEventStream(
     });
     at = end;
   }
-  if (messages.length === 0) return undefined;
   return { messages, stopped };
 }
 

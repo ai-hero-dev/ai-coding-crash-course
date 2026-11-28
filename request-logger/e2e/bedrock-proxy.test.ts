@@ -57,14 +57,17 @@ function send(
   });
 }
 
-/** An `aws` on PATH that counts its runs and prints `output`. */
-function fakeAwsCli(output: string): { env: Record<string, string>; runs: () => number } {
+function fakeAwsCli(
+  output: string,
+  failure?: { stderr: string; exitCode: number }
+): { env: Record<string, string>; runs: () => number } {
   const dir = scratch();
   const log = path.join(dir, "runs");
   fs.writeFileSync(log, "");
-  fs.writeFileSync(path.join(dir, "aws"), `#!/bin/sh\necho run >> "${log}"\nprintf '%s' '${output}'\n`, {
-    mode: 0o755,
-  });
+  const script = failure
+    ? `#!/bin/sh\necho run >> "${log}"\necho '${failure.stderr}' >&2\nexit ${failure.exitCode}\n`
+    : `#!/bin/sh\necho run >> "${log}"\nprintf '%s' '${output}'\n`;
+  fs.writeFileSync(path.join(dir, "aws"), script, { mode: 0o755 });
   return {
     env: {
       AWS_REGION: "us-east-1",
@@ -113,6 +116,23 @@ describe("Bedrock's signing route, through the real proxy", () => {
     const port = await start(`http://127.0.0.1:${(denying.address() as AddressInfo).port}`, cli.env);
     for (let i = 0; i < 4; i++) expect((await send(port, {})).status).toBe(403);
     expect(cli.runs()).toBe(1);
+  });
+
+  it("answers 502 with the exit code, never the AWS CLI's stderr, when it fails", async () => {
+    upstream = await startFakeUpstream();
+    const cli = fakeAwsCli("", {
+      stderr: "Error when retrieving credentials from custom-process: helper --token LEAKED-TOKEN",
+      exitCode: 255,
+    });
+    const port = await start(upstream.origin, cli.env);
+    let printed = "";
+    proxy!.proxy.stderr!.on("data", (d) => (printed += d));
+    const reply = await send(port, {});
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(reply.status).toBe(502);
+    expect(reply.body).toContain("exited with code 255");
+    expect(reply.body + printed).not.toContain("LEAKED");
+    expect(upstream.seen).toEqual([]);
   });
 
   it("answers 502 without quoting the AWS CLI's output when it is not JSON", async () => {

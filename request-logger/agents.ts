@@ -546,6 +546,13 @@ function bedrockRegion(
       error: `AWS_REGION is "${raw}", which is not an AWS region such as us-east-1.`,
     };
   }
+  if (/^cn-|-iso/.test(region)) {
+    return {
+      error:
+        `AWS_REGION is "${raw}". request-logger only supports Bedrock in the ` +
+        "standard AWS regions, whose endpoints end in amazonaws.com.",
+    };
+  }
   return { region };
 }
 

@@ -106,7 +106,7 @@ from this table. It is here so you can see what is supported before you start.
 
 | Agent           | Works | What you need                                                                            |
 | --------------- | ----- | ---------------------------------------------------------------------------------------- |
-| Claude Code     | Yes   | One command. Works with a subscription login, an Anthropic API key, Google Vertex AI, or Amazon Bedrock. |
+| Claude Code     | Yes   | One command. Subscription login, Anthropic API key, Google Vertex AI or Amazon Bedrock.  |
 | Codex           | Yes   | One flag. A subscription or an API key works.                                            |
 | GitHub Copilot  | Yes   | Your normal subscription login.                                                          |
 | OpenCode        | Yes   | One command, or a config file.                                                           |

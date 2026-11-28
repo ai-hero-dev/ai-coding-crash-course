@@ -300,6 +300,27 @@ describe("createCredentialProvider", () => {
     expect(calls).toBe(1);
   });
 
+  it("remembers a failed load for 10 seconds, so retries do not each run the AWS CLI", async () => {
+    let calls = 0;
+    let now = 0;
+    const provider = createCredentialProvider(
+      {},
+      async () => {
+        calls++;
+        throw new Error("the aws command exited with code 255");
+      },
+      () => now
+    );
+    for (let i = 0; i < 5; i++) {
+      await provider.get().catch(() => {});
+      now += 1_000;
+    }
+    expect(calls).toBe(1);
+    now = 10_000;
+    await provider.get().catch(() => {});
+    expect(calls).toBe(2);
+  });
+
   it("never quotes the AWS CLI's output in its error, which could hold a secret", async () => {
     for (const out of [
       '{"AccessKeyId":"AKID","SecretAccessKey":LEAKED-SECRET}',
@@ -423,6 +444,11 @@ describe("decodeBedrockStream", () => {
       ])
     );
     expect(out?.errors).toEqual(['throttlingException: Too many "tokens"']);
+  });
+
+  it("reports a stream cut off inside its first message", () => {
+    const out = decodeBedrockStream(bedrockChunk({ type: "message_start" }).subarray(0, 40));
+    expect(out).toEqual({ sse: "", errors: ["the stream ended part-way through a message"] });
   });
 
   it("tells a corrupted message apart from a cut-off stream", () => {

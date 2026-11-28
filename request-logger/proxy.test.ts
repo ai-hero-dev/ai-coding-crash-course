@@ -520,6 +520,12 @@ describe("refuseBrowserCaller", () => {
     expect(reason).toContain('..."');
   });
 
+  it("accepts a Host with no port when the proxy listens on port 80", () => {
+    expect(refuseBrowserCaller(bedrockSigningTarget(), "POST", { host: "localhost" }, 80)).toBeNull();
+    expect(refuseBrowserCaller(bedrockSigningTarget(), "POST", { host: "localhost:80" }, 80)).toBeNull();
+    expect(refuseBrowserCaller(bedrockSigningTarget(), "POST", { host: "localhost" }, 8787)).toContain("Host");
+  });
+
   it("refuses a rebound hostname, a wrong port or no Host at all", () => {
     for (const host of ["evil.example:8787", "localhost:9999", undefined]) {
       expect(refuse("POST", { host })).toContain("Host");
