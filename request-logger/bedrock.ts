@@ -31,6 +31,13 @@ export function uriEncode(value: string): string {
   );
 }
 
+const MODEL_CALL = /^\/model\/([^/?]+)\/(invoke|invoke-with-response-stream|converse|converse-stream|count-tokens)$/;
+
+export function isBedrockModelCall(url: string): boolean {
+  const modelId = url.match(MODEL_CALL)?.[1];
+  return modelId !== undefined && !/^\.\.?$/.test(modelId) && !/%2e/i.test(modelId);
+}
+
 export function canonicalUri(pathname: string): string {
   return pathname ? pathname.split("/").map(uriEncode).join("/") : "/";
 }
@@ -231,11 +238,17 @@ export function createCredentialProvider(
     if (!parsed?.AccessKeyId || !parsed?.SecretAccessKey) {
       throw new Error("the AWS CLI returned no access key");
     }
+    const expiresAtMs = parsed.Expiration ? Date.parse(parsed.Expiration) : undefined;
+    if (expiresAtMs !== undefined && expiresAtMs <= clock()) {
+      throw new Error(
+        'the AWS CLI returned credentials that have already expired. Run "aws sso login" and retry.'
+      );
+    }
     return {
       accessKeyId: parsed.AccessKeyId,
       secretAccessKey: parsed.SecretAccessKey,
       sessionToken: parsed.SessionToken || undefined,
-      expiresAtMs: parsed.Expiration ? Date.parse(parsed.Expiration) : undefined,
+      expiresAtMs,
     };
   }
 
@@ -248,7 +261,10 @@ export function createCredentialProvider(
           cached = {
             creds,
             validUntil: creds.expiresAtMs
-              ? Math.max(creds.expiresAtMs - EXPIRY_MARGIN_MS, clock() + RELOAD_FLOOR_MS)
+              ? Math.min(
+                  creds.expiresAtMs,
+                  Math.max(creds.expiresAtMs - EXPIRY_MARGIN_MS, clock() + RELOAD_FLOOR_MS)
+                )
               : clock() + UNDATED_TTL_MS,
             loadedAt: clock(),
           };

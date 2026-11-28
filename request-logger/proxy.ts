@@ -26,6 +26,7 @@ import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
 import {
   createCredentialProvider,
+  isBedrockModelCall,
   signRequest,
   type AwsCredentials,
 } from "./bedrock";
@@ -297,12 +298,21 @@ export function refuseBrowserCaller(
   return null;
 }
 
+export function refuseNonModelCall(target: ProxyTarget, url: string | undefined): string | null {
+  if (target.kind !== "target" || !target.awsSigning) return null;
+  return isBedrockModelCall(url ?? "")
+    ? null
+    : "it is not a Bedrock model call (POST /model/{id}/invoke, invoke-with-response-stream, converse, converse-stream or count-tokens)";
+}
+
 function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   target: ProxyTarget
 ): void {
-  const refused = refuseBrowserCaller(target, req.method, req.headers, PORT);
+  const refused =
+    refuseBrowserCaller(target, req.method, req.headers, PORT) ??
+    refuseNonModelCall(target, req.url);
   if (refused) {
     console.warn(
       `[request-logger] refused ${req.method ?? "GET"} ${shown(req.url)}: ${refused}. ` +

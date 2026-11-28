@@ -10,6 +10,7 @@ import {
   listenHosts,
   readSettings,
   refuseBrowserCaller,
+  refuseNonModelCall,
   rejectUpgrade,
   signedHeaders,
   TEST_DIR_ENV,
@@ -537,5 +538,17 @@ describe("refuseBrowserCaller", () => {
     expect(
       refuseBrowserCaller(target, "GET", { host: "evil.example", origin: "https://x", "sec-fetch-site": "cross-site" }, 8787)
     ).toBeNull();
+  });
+});
+
+describe("refuseNonModelCall", () => {
+  it("lets a model call through and refuses any other path on the signing route", () => {
+    expect(refuseNonModelCall(bedrockSigningTarget(), "/model/m/invoke-with-response-stream")).toBeNull();
+    expect(refuseNonModelCall(bedrockSigningTarget(), "/async-invoke")).toContain("not a Bedrock model call");
+  });
+
+  it("never refuses a target that signs nothing", () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    expect(refuseNonModelCall(target, "/anything")).toBeNull();
   });
 });

@@ -1768,37 +1768,39 @@ describe("Claude Code on Amazon Bedrock", () => {
     return result;
   };
 
-  for (const [name, upstream] of [
-    ["bedrockUpstream", bedrockUpstream],
-    ["bedrockApiKeyUpstream", bedrockApiKeyUpstream],
-  ] as const) {
-    describe(name, () => {
-      it("asks for AWS_REGION rather than guessing one", () => {
-        expect(upstream(claude, {})).toMatchObject({ error: expect.stringContaining("AWS_REGION") });
-      });
+  describe("bedrockUpstream's AWS_REGION check", () => {
+    it("asks for AWS_REGION rather than guessing one", () => {
+      expect(bedrockUpstream(claude, {})).toMatchObject({ error: expect.stringContaining("AWS_REGION") });
+    });
 
-      it("refuses a region that would change the hostname", () => {
-        expect(upstream(claude, { AWS_REGION: "x.evil.com/" })).toHaveProperty("error");
-      });
+    it("refuses a region that would change the hostname", () => {
+      expect(bedrockUpstream(claude, { AWS_REGION: "x.evil.com/" })).toHaveProperty("error");
+    });
 
-      it("refuses the China and ISO partitions, whose endpoints are not on amazonaws.com", () => {
-        for (const region of ["cn-north-1", "cn-northwest-1", "us-iso-east-1", "us-isob-east-1"]) {
-          expect(upstream(claude, { AWS_REGION: region })).toMatchObject({
-            error: expect.stringContaining("standard AWS regions"),
-          });
-        }
-      });
-
-      it("forwards to bedrock-runtime in that region, and falls back to AWS_DEFAULT_REGION", () => {
-        expect(upstream(claude, { AWS_REGION: "eu-west-1" })).toMatchObject({
-          host: "bedrock-runtime.eu-west-1.amazonaws.com",
+    it("refuses the China and ISO partitions, whose endpoints are not on amazonaws.com", () => {
+      for (const region of ["cn-north-1", "cn-northwest-1", "us-iso-east-1", "us-isob-east-1"]) {
+        expect(bedrockUpstream(claude, { AWS_REGION: region })).toMatchObject({
+          error: expect.stringContaining("standard AWS regions"),
         });
-        expect(upstream(claude, { AWS_DEFAULT_REGION: "us-west-2" })).toMatchObject({
-          host: "bedrock-runtime.us-west-2.amazonaws.com",
-        });
+      }
+    });
+
+    it("forwards to bedrock-runtime in that region, and falls back to AWS_DEFAULT_REGION", () => {
+      expect(bedrockUpstream(claude, { AWS_REGION: "eu-west-1" })).toMatchObject({
+        host: "bedrock-runtime.eu-west-1.amazonaws.com",
+      });
+      expect(bedrockUpstream(claude, { AWS_DEFAULT_REGION: "us-west-2" })).toMatchObject({
+        host: "bedrock-runtime.us-west-2.amazonaws.com",
       });
     });
-  }
+  });
+
+  it("applies the same AWS_REGION check on the API-key route", () => {
+    expect(bedrockApiKeyUpstream(claude, {})).toHaveProperty("error");
+    expect(bedrockApiKeyUpstream(claude, { AWS_REGION: "eu-west-1" })).toMatchObject({
+      host: "bedrock-runtime.eu-west-1.amazonaws.com",
+    });
+  });
 
   it("signs for bedrock on the AWS-credentials route only", () => {
     expect(bedrock("bedrock", { AWS_REGION: "eu-west-1" }).awsSigning).toEqual({

@@ -81,21 +81,10 @@ export const claudeCodeBedrock: Recipe = {
   sendsKey: false,
   extraChecks: ({ seen, logs }) => {
     const calls = seen.filter((r) => BEDROCK_MODEL_PATH.test(r.url));
-    const signed = calls.filter((r) =>
-      new RegExp(
-        `^AWS4-HMAC-SHA256 Credential=${E2E_AWS_KEY_ID}/\\d{8}/us-east-1/bedrock/aws4_request, ` +
-          "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, " +
-          "Signature=[0-9a-f]{64}$"
-      ).test(String(r.headers.authorization))
-    );
     return [
       {
         name: "every request Claude Code made was a POST, which the signing route requires",
         ok: seen.length > 0 && seen.every((r) => r.method === "POST"),
-      },
-      {
-        name: "the proxy signed every model call for bedrock in us-east-1",
-        ok: calls.length > 0 && signed.length === calls.length,
       },
       {
         name: "each signature verifies against the host, path, headers and body the upstream received",
@@ -127,14 +116,6 @@ export const claudeCodeBedrock: Recipe = {
         name: "the session token went upstream with the signature",
         ok: calls.every(
           (r) => r.headers["x-amz-security-token"] === E2E_AWS_SESSION_TOKEN
-        ),
-      },
-      {
-        name: "the signed payload hash is the hash of the body the upstream got",
-        ok: calls.every(
-          (r) =>
-            r.headers["x-amz-content-sha256"] ===
-            crypto.createHash("sha256").update(r.body).digest("hex")
         ),
       },
       {

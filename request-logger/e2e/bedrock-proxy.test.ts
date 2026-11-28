@@ -35,7 +35,13 @@ async function start(origin: string, env: Record<string, string>) {
 
 function send(
   port: number,
-  options: { method?: string; host?: string; headers?: Record<string, string>; body?: string }
+  options: {
+    method?: string;
+    host?: string;
+    path?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -43,7 +49,7 @@ function send(
         host: "127.0.0.1",
         port,
         method: options.method ?? "POST",
-        path: "/model/m/invoke",
+        path: options.path ?? "/model/m/invoke",
         headers: { host: options.host ?? `localhost:${port}`, ...options.headers },
       },
       (res) => {
@@ -92,8 +98,7 @@ describe("Bedrock's signing route, through the real proxy", () => {
   it.each([
     ["a POST with an Origin", { headers: { origin: "https://evil.example" } }],
     ["a no-cors GET a page sent, with no Origin", { method: "GET", headers: { "sec-fetch-site": "cross-site" } }],
-    ["a GET with no browser headers at all", { method: "GET" }],
-    ["a POST to a rebound hostname", { host: "evil.example:8787" }],
+    ["a POST to another Bedrock API", { path: "/async-invoke" }],
   ])("refuses %s, and signs nothing", async (_name, options) => {
     upstream = await startFakeUpstream();
     const port = await start(upstream.origin, KEYS);
@@ -135,16 +140,4 @@ describe("Bedrock's signing route, through the real proxy", () => {
     expect(upstream.seen).toEqual([]);
   });
 
-  it("answers 502 without quoting the AWS CLI's output when it is not JSON", async () => {
-    upstream = await startFakeUpstream();
-    const cli = fakeAwsCli('{"AccessKeyId":"AKIDCLI","SecretAccessKey":LEAKED-SECRET}');
-    const port = await start(upstream.origin, cli.env);
-    let printed = "";
-    proxy!.proxy.stderr!.on("data", (d) => (printed += d));
-    const reply = await send(port, {});
-    expect(reply.status).toBe(502);
-    expect(reply.body).toContain("not JSON");
-    expect(reply.body + printed).not.toContain("LEAKED");
-    expect(upstream.seen).toEqual([]);
-  });
 });

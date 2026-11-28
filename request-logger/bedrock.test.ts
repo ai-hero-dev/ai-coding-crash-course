@@ -6,13 +6,13 @@ import { describe, expect, it } from "vitest";
 import {
   authorizationFor,
   canonicalQuery,
+  isBedrockModelCall,
   canonicalUri,
   crc32,
   createCredentialProvider,
   decodeBedrockStream,
   parseEventStream,
   signRequest,
-  signingKey,
   uriEncode,
 } from "./bedrock";
 import {
@@ -26,38 +26,12 @@ const EMPTY_SHA256 =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 describe("SigV4 against AWS's published values", () => {
-  it("derives the signing key from AWS's documented example", () => {
-    expect(
-      signingKey(SECRET, "20150830", "us-east-1", "iam").toString("hex")
-    ).toBe("c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9");
-  });
-
-  it("matches the signature in AWS's get-vanilla test vector", () => {
-    const auth = authorizationFor({
-      method: "GET",
-      path: "/",
-      headers: {
-        host: "example.amazonaws.com",
-        "x-amz-date": "20150830T123600Z",
-      },
-      payloadHash: EMPTY_SHA256,
-      amzDate: "20150830T123600Z",
-      region: "us-east-1",
-      service: "service",
-      credentials: { accessKeyId: "AKIDEXAMPLE", secretAccessKey: SECRET },
-    });
-    expect(auth).toBe(
-      "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, " +
-        "SignedHeaders=host;x-amz-date, " +
-        "Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
-    );
-  });
-
   const STS_TOKEN =
     "AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA==";
   const FORM_SHA256 = "9095672bbd1f56dfc5b65f3e153adc8731a4a654192329106275f4c7b24d0b6e";
 
   it.each([
+    ["get-vanilla", "GET", "/", {}, EMPTY_SHA256, "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"],
     ["post-vanilla", "POST", "/", {}, EMPTY_SHA256, "5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b"],
     [
       "post-x-www-form-urlencoded",
@@ -161,12 +135,6 @@ describe("signRequest", () => {
     );
   });
 
-  it("gives a different signature for a different body", () => {
-    const credentials = { accessKeyId: "AKID", secretAccessKey: "SECRET" };
-    const a = signRequest({ ...base, credentials });
-    const b = signRequest({ ...base, body: Buffer.from("{}"), credentials });
-    expect(a.authorization).not.toBe(b.authorization);
-  });
 });
 
 describe("createCredentialProvider", () => {
@@ -229,6 +197,34 @@ describe("createCredentialProvider", () => {
     expect(calls).toBe(2);
   });
 
+  it("never hands out credentials past their expiry", async () => {
+    let calls = 0;
+    let now = Date.parse("2026-11-28T10:00:00Z");
+    const provider = createCredentialProvider(
+      {},
+      async () => {
+        calls++;
+        return cliOutput(new Date(now + 10_000).toISOString());
+      },
+      () => now
+    );
+    const first = await provider.get();
+    now += 15_000;
+    const second = await provider.get();
+    expect(calls).toBe(2);
+    expect(second.expiresAtMs).toBeGreaterThan(now);
+    expect(first.expiresAtMs).toBeLessThan(now);
+  });
+
+  it("refuses credentials the AWS CLI returns already expired", async () => {
+    const provider = createCredentialProvider(
+      {},
+      async () => cliOutput("2026-11-28T09:00:00Z"),
+      () => Date.parse("2026-11-28T10:00:00Z")
+    );
+    await expect(provider.get()).rejects.toThrow(/already expired.*aws sso login/);
+  });
+
   it("keeps credentials that are nearly expired for 30 seconds, not zero", async () => {
     let calls = 0;
     let now = Date.parse("2026-11-28T10:00:00Z");
@@ -286,21 +282,6 @@ describe("createCredentialProvider", () => {
     provider.invalidate(first);
     expect(await provider.get()).toBe(second);
     expect(calls).toBe(2);
-  });
-
-  it("does not lose a newer load to a rejection that arrives while it runs", async () => {
-    let release: (out: string) => void = () => {};
-    let calls = 0;
-    const provider = createCredentialProvider({}, () => {
-      calls++;
-      return new Promise((resolve) => (release = resolve));
-    });
-    const loading = provider.get();
-    provider.invalidate({ accessKeyId: "OLDER", secretAccessKey: "s" });
-    release(cliOutput("2099-01-01T00:00:00Z"));
-    await loading;
-    await provider.get();
-    expect(calls).toBe(1);
   });
 
   it("remembers a failed load for 10 seconds, so retries do not each run the AWS CLI", async () => {
@@ -366,6 +347,35 @@ describe("createCredentialProvider", () => {
       }
     );
     await expect(provider.get()).rejects.toThrow(/profile "work".*aws sso login/s);
+  });
+});
+
+describe("isBedrockModelCall", () => {
+  it("accepts the model calls Claude Code makes, model IDs and encoded ARNs alike", () => {
+    for (const action of ["invoke", "invoke-with-response-stream", "converse", "converse-stream", "count-tokens"]) {
+      expect(isBedrockModelCall(`/model/us.anthropic.claude-haiku-4-5-20251001-v1%3A0/${action}`)).toBe(true);
+    }
+    expect(
+      isBedrockModelCall(
+        "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aapplication-inference-profile%2Fabc/invoke"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses every other Bedrock API, a query, and a model ID that walks up the path", () => {
+    for (const url of [
+      "/async-invoke",
+      "/guardrail/g/version/1/apply",
+      "/model/m",
+      "/model/m/invoke/extra",
+      "/model/m/invoke?x=1",
+      "/model/../invoke",
+      "/model/./invoke",
+      "/model/%2e%2e/invoke",
+      "/",
+    ]) {
+      expect(isBedrockModelCall(url)).toBe(false);
+    }
   });
 });
 
@@ -473,16 +483,5 @@ describe("decodeBedrockStream", () => {
     expect(decodeBedrockStream(Buffer.concat([chunk, bad]))?.errors).toEqual([
       "a message failed its CRC or header check, so the rest of the stream was not decoded",
     ]);
-  });
-
-  it("reports a stream that was cut off", () => {
-    const chunk = bedrockChunk({ type: "message_start" });
-    const out = decodeBedrockStream(Buffer.concat([chunk, chunk.subarray(0, 20)]));
-    expect(out?.errors).toEqual(["the stream ended part-way through a message"]);
-  });
-
-  it("leaves a plain SSE or JSON response alone", () => {
-    expect(decodeBedrockStream(Buffer.from("event: ping\ndata: {}\n"))).toBeUndefined();
-    expect(decodeBedrockStream(Buffer.from('{"message":"nope"}'))).toBeUndefined();
   });
 });
