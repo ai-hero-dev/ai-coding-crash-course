@@ -35,9 +35,23 @@ export function canonicalUri(pathname: string): string {
   return pathname ? pathname.split("/").map(uriEncode).join("/") : "/";
 }
 
+const decodeQueryPart = (part: string) => {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+};
+
 export function canonicalQuery(query: string): string {
-  return [...new URLSearchParams(query).entries()]
-    .map(([k, v]) => [uriEncode(k), uriEncode(v)] as const)
+  return query
+    .split("&")
+    .filter(Boolean)
+    .map((pair) => {
+      const at = pair.indexOf("=");
+      return at === -1 ? [pair, ""] : [pair.slice(0, at), pair.slice(at + 1)];
+    })
+    .map(([k, v]) => [uriEncode(decodeQueryPart(k)), uriEncode(decodeQueryPart(v))] as const)
     .sort(([ak, av], [bk, bv]) =>
       ak === bk ? (av < bv ? -1 : av > bv ? 1 : 0) : ak < bk ? -1 : 1
     )
@@ -142,6 +156,7 @@ export function signRequest(input: SignInput): Record<string, string> {
 
 const EXPIRY_MARGIN_MS = 2 * 60_000;
 const UNDATED_TTL_MS = 5 * 60_000;
+const RELOAD_FLOOR_MS = 30_000;
 
 type Exec = (env: NodeJS.ProcessEnv) => Promise<string>;
 
@@ -161,7 +176,8 @@ export function createCredentialProvider(
   exec: Exec = runAwsCli,
   clock: () => number = Date.now
 ) {
-  let cached: { creds: AwsCredentials; validUntil: number } | null = null;
+  let cached: { creds: AwsCredentials; validUntil: number; loadedAt: number } | null =
+    null;
   let inflight: Promise<AwsCredentials> | null = null;
 
   async function load(): Promise<AwsCredentials> {
@@ -183,8 +199,15 @@ export function createCredentialProvider(
           `expired, run "aws sso login" and retry.`
       );
     }
-    const parsed = JSON.parse(stdout);
-    if (!parsed.AccessKeyId || !parsed.SecretAccessKey) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new Error(
+        'the AWS CLI printed something that is not JSON for "aws configure export-credentials --format process"'
+      );
+    }
+    if (!parsed?.AccessKeyId || !parsed?.SecretAccessKey) {
       throw new Error("the AWS CLI returned no access key");
     }
     return {
@@ -205,6 +228,7 @@ export function createCredentialProvider(
             validUntil: creds.expiresAtMs
               ? creds.expiresAtMs - EXPIRY_MARGIN_MS
               : clock() + UNDATED_TTL_MS,
+            loadedAt: clock(),
           };
           return creds;
         })
@@ -213,7 +237,9 @@ export function createCredentialProvider(
         });
       return inflight;
     },
-    invalidate(): void {
+    invalidate(rejected: AwsCredentials): void {
+      if (cached?.creds !== rejected) return;
+      if (clock() - cached.loadedAt < RELOAD_FLOOR_MS) return;
       cached = null;
     },
   };
@@ -246,10 +272,12 @@ function readHeaders(buf: Buffer): Record<string, string> | undefined {
   let at = 0;
   while (at < buf.length) {
     const nameLength = buf[at];
+    if (at + 2 + nameLength > buf.length) return undefined;
     const name = buf.toString("utf8", at + 1, at + 1 + nameLength);
     const type = buf[at + 1 + nameLength];
     at += 2 + nameLength;
     if (type === 6 || type === 7) {
+      if (at + 2 > buf.length) return undefined;
       const length = buf.readUInt16BE(at);
       if (type === 7) headers[name] = buf.toString("utf8", at + 2, at + 2 + length);
       at += 2 + length;
@@ -264,21 +292,39 @@ function readHeaders(buf: Buffer): Record<string, string> | undefined {
 
 export function parseEventStream(
   buf: Buffer
-): { messages: EventStreamMessage[]; truncated: boolean } | undefined {
+):
+  | { messages: EventStreamMessage[]; stopped: "cut-off" | "corrupt" | null }
+  | undefined {
   const messages: EventStreamMessage[] = [];
   let at = 0;
-  while (at + 16 <= buf.length) {
+  let stopped: "cut-off" | "corrupt" | null = null;
+  while (at < buf.length) {
+    if (at + 16 > buf.length) {
+      stopped = "cut-off";
+      break;
+    }
     const total = buf.readUInt32BE(at);
     const headersLength = buf.readUInt32BE(at + 4);
-    const validPrelude =
-      buf.readUInt32BE(at + 8) === crc32(buf.subarray(at, at + 8)) &&
-      total >= 16 + headersLength &&
-      at + total <= buf.length;
-    if (!validPrelude) break;
+    if (
+      buf.readUInt32BE(at + 8) !== crc32(buf.subarray(at, at + 8)) ||
+      total < 16 + headersLength
+    ) {
+      stopped = "corrupt";
+      break;
+    }
+    if (at + total > buf.length) {
+      stopped = "cut-off";
+      break;
+    }
     const end = at + total;
-    if (buf.readUInt32BE(end - 4) !== crc32(buf.subarray(at, end - 4))) break;
-    const headers = readHeaders(buf.subarray(at + 12, at + 12 + headersLength));
-    if (!headers) break;
+    const headers =
+      buf.readUInt32BE(end - 4) === crc32(buf.subarray(at, end - 4))
+        ? readHeaders(buf.subarray(at + 12, at + 12 + headersLength))
+        : undefined;
+    if (!headers) {
+      stopped = "corrupt";
+      break;
+    }
     messages.push({
       headers,
       payload: buf.subarray(at + 12 + headersLength, end - 4),
@@ -286,7 +332,7 @@ export function parseEventStream(
     at = end;
   }
   if (messages.length === 0) return undefined;
-  return { messages, truncated: at < buf.length };
+  return { messages, stopped };
 }
 
 export function decodeBedrockStream(
@@ -318,8 +364,10 @@ export function decodeBedrockStream(
       );
     }
   }
-  if (parsed.truncated) {
+  if (parsed.stopped === "cut-off") {
     errors.push("the stream ended part-way through a message");
+  } else if (parsed.stopped === "corrupt") {
+    errors.push("a message failed its CRC or header check, so the rest of the stream was not decoded");
   }
   return { sse: events.join("\n"), errors };
 }

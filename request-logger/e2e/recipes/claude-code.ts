@@ -89,6 +89,10 @@ export const claudeCodeBedrock: Recipe = {
     );
     return [
       {
+        name: "every request Claude Code made was a POST, which the signing route requires",
+        ok: seen.length > 0 && seen.every((r) => r.method === "POST"),
+      },
+      {
         name: "the proxy signed every model call for bedrock in us-east-1",
         ok: calls.length > 0 && signed.length === calls.length,
       },

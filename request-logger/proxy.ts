@@ -24,7 +24,11 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
-import { createCredentialProvider, signRequest } from "./bedrock";
+import {
+  createCredentialProvider,
+  signRequest,
+  type AwsCredentials,
+} from "./bedrock";
 import {
   resolveChoice,
   shouldLogRequest,
@@ -219,8 +223,8 @@ export async function signedHeaders(
   upstreamPath: string,
   body: Buffer,
   env: NodeJS.ProcessEnv = process.env
-): Promise<http.OutgoingHttpHeaders> {
-  if (target.kind !== "target" || !target.awsSigning) return headers;
+): Promise<{ headers: http.OutgoingHttpHeaders; credentials?: AwsCredentials }> {
+  if (target.kind !== "target" || !target.awsSigning) return { headers };
   awsCredentials ??= createCredentialProvider(env);
   const credentials = await awsCredentials.get();
   const kept: http.OutgoingHttpHeaders = {};
@@ -230,16 +234,19 @@ export async function signedHeaders(
     kept[key] = value;
   }
   return {
-    ...kept,
-    ...signRequest({
-      method,
-      hostname,
-      path: upstreamPath,
-      body,
-      region: target.awsSigning.region,
-      service: target.awsSigning.service,
-      credentials,
-    }),
+    headers: {
+      ...kept,
+      ...signRequest({
+        method,
+        hostname,
+        path: upstreamPath,
+        body,
+        region: target.awsSigning.region,
+        service: target.awsSigning.service,
+        credentials,
+      }),
+    },
+    credentials,
   };
 }
 
@@ -251,10 +258,18 @@ export function listenHosts(target: ProxyTarget): Array<string | undefined> {
 
 export function refuseBrowserCaller(
   target: ProxyTarget,
+  method: string | undefined,
   headers: http.IncomingHttpHeaders,
   port: number
 ): string | null {
   if (target.kind !== "target" || !target.awsSigning) return null;
+  if (method !== "POST") {
+    return `it is a ${method ?? "request with no method"}, and Bedrock's model calls are all POST`;
+  }
+  const fetchSite = headers["sec-fetch-site"];
+  if (fetchSite !== undefined && fetchSite !== "none") {
+    return `its Sec-Fetch-Site is "${fetchSite}", so a web page sent it`;
+  }
   if (headers.origin !== undefined) {
     return `it has an Origin header (${headers.origin}), so a web page sent it`;
   }
@@ -271,7 +286,7 @@ function handle(
   res: http.ServerResponse,
   target: ProxyTarget
 ): void {
-  const refused = refuseBrowserCaller(target, req.headers, PORT);
+  const refused = refuseBrowserCaller(target, req.method, req.headers, PORT);
   if (refused) {
     console.warn(
       `[request-logger] refused ${req.method ?? "GET"} ${req.url ?? "/"}: ${refused}. ` +
@@ -302,8 +317,11 @@ function handle(
       SETTINGS.upstreamOverride
     );
 
+    let signedWith: AwsCredentials | undefined;
     const onUpstreamResponse = (upstreamRes: http.IncomingMessage) => {
-      if (upstreamRes.statusCode === 403) awsCredentials?.invalidate();
+      if (upstreamRes.statusCode === 403 && signedWith) {
+        awsCredentials?.invalidate(signedWith);
+      }
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       const responseChunks: Buffer[] = [];
       upstreamRes.on("data", (chunk: Buffer) => {
@@ -347,7 +365,8 @@ function handle(
       hostname,
       upstreamPath,
       body
-    ).then((headers) => {
+    ).then(({ headers, credentials }) => {
+      signedWith = credentials;
       const requestOptions: http.RequestOptions = {
         hostname,
         port,
@@ -741,7 +760,13 @@ async function main(): Promise<void> {
   };
   const [required, ...optional] = listenHosts(target);
   listen(required, () => printBanner(target));
-  for (const host of optional) listen(host).on("error", () => {});
+  for (const host of optional) {
+    listen(host).on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT") return;
+      console.error(`[request-logger] could not listen on [${host}]:${PORT}: ${err.message}`);
+      process.exit(1);
+    });
+  }
 }
 
 /** Print a labelled paragraph, indented and wrapped. */

@@ -50,6 +50,51 @@ describe("SigV4 against AWS's published values", () => {
     );
   });
 
+  const STS_TOKEN =
+    "AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA==";
+  const FORM_SHA256 = "9095672bbd1f56dfc5b65f3e153adc8731a4a654192329106275f4c7b24d0b6e";
+
+  it.each([
+    ["post-vanilla", "POST", "/", {}, EMPTY_SHA256, "5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b"],
+    [
+      "post-x-www-form-urlencoded",
+      "POST",
+      "/",
+      {
+        "content-length": "13",
+        "content-type": "application/x-www-form-urlencoded",
+        "x-amz-content-sha256": FORM_SHA256,
+      },
+      FORM_SHA256,
+      "d3875051da38690788ef43de4db0d8f280229d82040bfac253562e56c3f20e0b",
+    ],
+    [
+      "get-vanilla-with-session-token",
+      "GET",
+      "/",
+      { "x-amz-security-token": "6e86291e8372ff2a2260956d9b8aae1d763fbf315fa00fa31553b73ebf194267" },
+      EMPTY_SHA256,
+      "07ec1639c89043aa0e3e2de82b96708f198cceab042d4a97044c66dd9f74e7f8",
+    ],
+    ["post-sts-header-before", "POST", "/", { "x-amz-security-token": STS_TOKEN }, EMPTY_SHA256, "85d96828115b5dc0cfc3bd16ad9e210dd772bbebba041836c64533a82be05ead"],
+    ["get-space-unnormalized", "GET", "/example space/", {}, EMPTY_SHA256, "652487583200325589f1fba4c7e578f72c47cb61beeca81406b39ddec1366741"],
+    ["get-utf8", "GET", "/\u1234", {}, EMPTY_SHA256, "8318018e0b0f223aa2bbf98705b62bb787dc9c0e678f255a891fd03141be5d85"],
+    ["get-vanilla-query-order-encoded", "GET", "/?Param-3=Value3&Param=Value2&%E1%88%B4=Value1", {}, EMPTY_SHA256, "371d3713e185cc334048618a97f809c9ffe339c62934c032af5a0e595648fcac"],
+    ["get-vanilla-utf8-query", "GET", "/?\u1234=bar", {}, EMPTY_SHA256, "2cdec8eed098649ff3a119c94853b13c643bcf08f8b0a1d91e12c9027818dd04"],
+  ] as const)("matches AWS's %s test vector", (_name, method, path, extra, payloadHash, signature) => {
+    const auth = authorizationFor({
+      method,
+      path,
+      headers: { host: "example.amazonaws.com", "x-amz-date": "20150830T123600Z", ...extra },
+      payloadHash,
+      amzDate: "20150830T123600Z",
+      region: "us-east-1",
+      service: "service",
+      credentials: { accessKeyId: "AKIDEXAMPLE", secretAccessKey: SECRET },
+    });
+    expect(auth.slice(auth.indexOf("Signature=") + 10)).toBe(signature);
+  });
+
   it("encodes the way RFC 3986 asks", () => {
     expect(uriEncode("a b/c:d!*'()")).toBe("a%20b%2Fc%3Ad%21%2A%27%28%29");
     expect(uriEncode("A-z_0.9~")).toBe("A-z_0.9~");
@@ -64,6 +109,10 @@ describe("SigV4 against AWS's published values", () => {
     expect(canonicalQuery("a-b=2&a=1")).toBe("a=1&a-b=2");
     expect(canonicalQuery("a=2&a=1&B=3")).toBe("B=3&a=1&a=2");
     expect(canonicalQuery("")).toBe("");
+  });
+
+  it("keeps a + in the query as a +, the way the AWS SDKs sign it", () => {
+    expect(canonicalQuery("a=b+c&d=e%2Bf")).toBe("a=b%2Bc&d=e%2Bf");
   });
 });
 
@@ -159,16 +208,87 @@ describe("createCredentialProvider", () => {
     expect(calls).toBe(2);
   });
 
-  it("reloads after invalidate()", async () => {
+  it("reloads after AWS rejects the credentials it handed out", async () => {
     let calls = 0;
-    const provider = createCredentialProvider({}, async () => {
-      calls++;
-      return cliOutput("2099-01-01T00:00:00Z");
-    });
-    await provider.get();
-    provider.invalidate();
+    let now = 0;
+    const provider = createCredentialProvider(
+      {},
+      async () => {
+        calls++;
+        return cliOutput("2099-01-01T00:00:00Z");
+      },
+      () => now
+    );
+    const rejected = await provider.get();
+    now = 30_000;
+    provider.invalidate(rejected);
     await provider.get();
     expect(calls).toBe(2);
+  });
+
+  it("runs the AWS CLI at most once every 30 seconds however many 403s come back", async () => {
+    let calls = 0;
+    let now = 0;
+    const provider = createCredentialProvider(
+      {},
+      async () => {
+        calls++;
+        return cliOutput("2099-01-01T00:00:00Z");
+      },
+      () => now
+    );
+    for (let i = 0; i < 5; i++) {
+      provider.invalidate(await provider.get());
+      now += 1_000;
+    }
+    expect(calls).toBe(1);
+  });
+
+  it("ignores a rejection of credentials it has already replaced", async () => {
+    let calls = 0;
+    let now = 0;
+    const provider = createCredentialProvider(
+      {},
+      async () => {
+        calls++;
+        return cliOutput("2099-01-01T00:00:00Z");
+      },
+      () => now
+    );
+    const first = await provider.get();
+    now = 60_000;
+    provider.invalidate(first);
+    const second = await provider.get();
+    provider.invalidate(first);
+    expect(await provider.get()).toBe(second);
+    expect(calls).toBe(2);
+  });
+
+  it("does not lose a newer load to a rejection that arrives while it runs", async () => {
+    let release: (out: string) => void = () => {};
+    let calls = 0;
+    const provider = createCredentialProvider({}, () => {
+      calls++;
+      return new Promise((resolve) => (release = resolve));
+    });
+    const loading = provider.get();
+    provider.invalidate({ accessKeyId: "OLDER", secretAccessKey: "s" });
+    release(cliOutput("2099-01-01T00:00:00Z"));
+    await loading;
+    await provider.get();
+    expect(calls).toBe(1);
+  });
+
+  it("never quotes the AWS CLI's output in its error, which could hold a secret", async () => {
+    for (const out of [
+      '{"AccessKeyId":"AKID","SecretAccessKey":LEAKED-SECRET}',
+      "LEAKED-SECRET",
+    ]) {
+      const provider = createCredentialProvider({}, async () => out);
+      const error = await provider.get().catch((e: Error) => e);
+      expect((error as Error).message).toContain("not JSON");
+      expect((error as Error).message).not.toContain("LEAKED");
+    }
   });
 
   it("shares one CLI call between simultaneous requests", async () => {
@@ -208,7 +328,7 @@ describe("parseEventStream", () => {
         eventStreamMessage({ ":message-type": "event" }, ""),
       ])
     );
-    expect(parsed?.truncated).toBe(false);
+    expect(parsed?.stopped).toBeNull();
     expect(
       parsed?.messages.map((m) => [m.headers, m.payload.toString()])
     ).toEqual([
@@ -229,7 +349,7 @@ describe("parseEventStream", () => {
     bad[bad.length - 6] ^= 0xff; // one payload byte, so the message CRC fails
     const parsed = parseEventStream(Buffer.concat([good, bad]));
     expect(parsed?.messages).toHaveLength(1);
-    expect(parsed?.truncated).toBe(true);
+    expect(parsed?.stopped).toBe("corrupt");
   });
 
   it("notices a stream cut off part-way through a message", () => {
@@ -238,7 +358,20 @@ describe("parseEventStream", () => {
       Buffer.concat([whole, whole.subarray(0, whole.length - 3)])
     );
     expect(parsed?.messages).toHaveLength(1);
-    expect(parsed?.truncated).toBe(true);
+    expect(parsed?.stopped).toBe("cut-off");
+  });
+
+  it("calls a message corrupt when its CRCs pass but its headers run past the end", () => {
+    const headers = Buffer.from([1, 0x61, 7]);
+    const prelude = Buffer.alloc(12);
+    prelude.writeUInt32BE(12 + headers.length + 4, 0);
+    prelude.writeUInt32BE(headers.length, 4);
+    prelude.writeUInt32BE(zlib.crc32(prelude.subarray(0, 8)), 8);
+    const message = Buffer.concat([prelude, headers]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(message), 0);
+    const good = eventStreamMessage({ ":message-type": "event" }, "ok");
+    expect(parseEventStream(Buffer.concat([good, message, crc]))?.stopped).toBe("corrupt");
   });
 });
 
@@ -265,6 +398,15 @@ describe("decodeBedrockStream", () => {
       ])
     );
     expect(out?.errors).toEqual(['throttlingException: Too many "tokens"']);
+  });
+
+  it("tells a corrupted message apart from a cut-off stream", () => {
+    const chunk = bedrockChunk({ type: "message_start" });
+    const bad = Buffer.from(chunk);
+    bad[bad.length - 6] ^= 0xff;
+    expect(decodeBedrockStream(Buffer.concat([chunk, bad]))?.errors).toEqual([
+      "a message failed its CRC or header check, so the rest of the stream was not decoded",
+    ]);
   });
 
   it("reports a stream that was cut off", () => {

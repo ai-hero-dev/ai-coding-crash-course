@@ -436,8 +436,8 @@ function bedrockSigningTarget() {
 describe("signedHeaders", () => {
   const env = { AWS_ACCESS_KEY_ID: "AKID", AWS_SECRET_ACCESS_KEY: "SECRET" };
 
-  it("replaces any signature the agent made with a fresh one", async () => {
-    const out = await signedHeaders(
+  it("replaces any signature the agent made with a fresh one, and says which credentials signed", async () => {
+    const { headers, credentials } = await signedHeaders(
       bedrockSigningTarget(),
       {
         authorization: "AWS4-HMAC-SHA256 old",
@@ -451,20 +451,21 @@ describe("signedHeaders", () => {
       Buffer.from("{}"),
       env
     );
-    expect(out["content-type"]).toBe("application/json");
-    expect(out.authorization).toMatch(
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers.authorization).toMatch(
       /^AWS4-HMAC-SHA256 Credential=AKID\/\d{8}\/us-east-1\/bedrock\/aws4_request, /
     );
-    expect(out["x-amz-date"]).not.toBe("old");
-    expect(out).not.toHaveProperty("x-amz-security-token");
+    expect(headers["x-amz-date"]).not.toBe("old");
+    expect(headers).not.toHaveProperty("x-amz-security-token");
+    expect(credentials?.accessKeyId).toBe("AKID");
   });
 
-  it("hands every other target its headers back untouched", async () => {
+  it("hands every other target its headers back untouched, unsigned", async () => {
     const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
     const headers = { authorization: "Bearer keep", "x-amz-foo": "keep" };
-    expect(
-      await signedHeaders(target, headers, "POST", "h", "/p", Buffer.alloc(0), env)
-    ).toBe(headers);
+    const out = await signedHeaders(target, headers, "POST", "h", "/p", Buffer.alloc(0), env);
+    expect(out.headers).toBe(headers);
+    expect(out.credentials).toBeUndefined();
   });
 });
 
@@ -480,32 +481,42 @@ describe("listenHosts", () => {
 });
 
 describe("refuseBrowserCaller", () => {
+  const refuse = (method: string | undefined, headers: Record<string, string | undefined>) =>
+    refuseBrowserCaller(bedrockSigningTarget(), method, headers, 8787);
+
   it("lets an agent on this machine through", () => {
     for (const host of ["localhost:8787", "127.0.0.1:8787", "[::1]:8787", "LOCALHOST:8787"]) {
-      expect(refuseBrowserCaller(bedrockSigningTarget(), { host }, 8787)).toBeNull();
+      expect(refuse("POST", { host })).toBeNull();
     }
+    expect(refuse("POST", { host: "localhost:8787", "sec-fetch-site": "none" })).toBeNull();
   });
 
   it("refuses a request a web page sent, which always has an Origin", () => {
-    expect(
-      refuseBrowserCaller(
-        bedrockSigningTarget(),
-        { host: "localhost:8787", origin: "https://evil.example" },
-        8787
-      )
-    ).toContain("Origin");
+    expect(refuse("POST", { host: "localhost:8787", origin: "https://evil.example" })).toContain("Origin");
+  });
+
+  it("refuses a cross-site request a browser marked, even a GET with no Origin", () => {
+    for (const site of ["cross-site", "same-site", "same-origin"]) {
+      expect(refuse("POST", { host: "localhost:8787", "sec-fetch-site": site })).toContain("Sec-Fetch-Site");
+    }
+  });
+
+  it("refuses anything but a POST", () => {
+    for (const method of ["GET", "HEAD", "PUT", "DELETE", undefined]) {
+      expect(refuse(method, { host: "localhost:8787" })).toContain("POST");
+    }
   });
 
   it("refuses a rebound hostname, a wrong port or no Host at all", () => {
     for (const host of ["evil.example:8787", "localhost:9999", undefined]) {
-      expect(refuseBrowserCaller(bedrockSigningTarget(), { host }, 8787)).toContain("Host");
+      expect(refuse("POST", { host })).toContain("Host");
     }
   });
 
   it("never refuses a target that signs nothing", () => {
     const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
     expect(
-      refuseBrowserCaller(target, { host: "evil.example", origin: "https://x" }, 8787)
+      refuseBrowserCaller(target, "GET", { host: "evil.example", origin: "https://x", "sec-fetch-site": "cross-site" }, 8787)
     ).toBeNull();
   });
 });
