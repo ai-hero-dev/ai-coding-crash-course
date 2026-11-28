@@ -226,6 +226,27 @@ describe("createCredentialProvider", () => {
     expect(calls).toBe(2);
   });
 
+  it("keeps credentials that are nearly expired for 30 seconds, not zero", async () => {
+    let calls = 0;
+    let now = Date.parse("2026-11-28T10:00:00Z");
+    const provider = createCredentialProvider(
+      {},
+      async () => {
+        calls++;
+        return cliOutput("2026-11-28T10:01:30Z");
+      },
+      () => now
+    );
+    for (let i = 0; i < 5; i++) {
+      await provider.get();
+      now += 1_000;
+    }
+    expect(calls).toBe(1);
+    now += 30_000;
+    await provider.get();
+    expect(calls).toBe(2);
+  });
+
   it("runs the AWS CLI at most once every 30 seconds however many 403s come back", async () => {
     let calls = 0;
     let now = 0;
@@ -388,6 +409,10 @@ describe("decodeBedrockStream", () => {
         'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\n'
     );
     expect(out?.errors).toEqual([]);
+  });
+
+  it("gives a chunk with no type a data line only", () => {
+    expect(decodeBedrockStream(bedrockChunk({ foo: 1 }))?.sse).toBe('data: {"foo":1}\n');
   });
 
   it("names the exception Bedrock sends part-way through a stream", () => {

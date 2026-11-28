@@ -460,6 +460,13 @@ describe("signedHeaders", () => {
     expect(credentials?.accessKeyId).toBe("AKID");
   });
 
+  it("signs with the credentials of the env it is given, on every call", async () => {
+    const sign = (env: NodeJS.ProcessEnv) =>
+      signedHeaders(bedrockSigningTarget(), {}, "POST", "h", "/p", Buffer.alloc(0), env);
+    expect((await sign({ AWS_ACCESS_KEY_ID: "ONE", AWS_SECRET_ACCESS_KEY: "s" })).credentials?.accessKeyId).toBe("ONE");
+    expect((await sign({ AWS_ACCESS_KEY_ID: "TWO", AWS_SECRET_ACCESS_KEY: "s" })).credentials?.accessKeyId).toBe("TWO");
+  });
+
   it("hands every other target its headers back untouched, unsigned", async () => {
     const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
     const headers = { authorization: "Bearer keep", "x-amz-foo": "keep" };
@@ -505,6 +512,12 @@ describe("refuseBrowserCaller", () => {
     for (const method of ["GET", "HEAD", "PUT", "DELETE", undefined]) {
       expect(refuse(method, { host: "localhost:8787" })).toContain("POST");
     }
+  });
+
+  it("quotes at most 120 characters of a header it refuses", () => {
+    const reason = refuse("POST", { host: "localhost:8787", origin: `https://${"a".repeat(5000)}` });
+    expect(reason!.length).toBeLessThan(200);
+    expect(reason).toContain('..."');
   });
 
   it("refuses a rebound hostname, a wrong port or no Host at all", () => {

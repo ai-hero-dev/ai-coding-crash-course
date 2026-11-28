@@ -709,6 +709,7 @@ const AGENTS: AgentEntry[] = [
         label: "Amazon Bedrock (API key)",
         upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
         resolveUpstream: bedrockApiKeyUpstream,
+        // https://code.claude.com/docs/en/amazon-bedrock
         renderer: "anthropic",
         env: [
           ["ANTHROPIC_BEDROCK_BASE_URL", "{baseUrl}"],

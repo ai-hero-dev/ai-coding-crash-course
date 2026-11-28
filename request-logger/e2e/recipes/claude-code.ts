@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { authorizationFor } from "../../bedrock";
 import { DUMMY_KEY, type Recipe } from "../driver";
 import { npmTool } from "../install";
 
@@ -95,6 +96,32 @@ export const claudeCodeBedrock: Recipe = {
       {
         name: "the proxy signed every model call for bedrock in us-east-1",
         ok: calls.length > 0 && signed.length === calls.length,
+      },
+      {
+        name: "each signature verifies against the host, path, headers and body the upstream received",
+        ok:
+          calls.length > 0 &&
+          calls.every((r) => {
+            const date = String(r.headers["x-amz-date"]);
+            return (
+              r.headers.authorization ===
+              authorizationFor({
+                method: r.method,
+                path: r.url,
+                headers: {
+                  host: String(r.headers.host),
+                  "x-amz-content-sha256": crypto.createHash("sha256").update(r.body).digest("hex"),
+                  "x-amz-date": date,
+                  "x-amz-security-token": E2E_AWS_SESSION_TOKEN,
+                },
+                payloadHash: crypto.createHash("sha256").update(r.body).digest("hex"),
+                amzDate: date,
+                region: "us-east-1",
+                service: "bedrock",
+                credentials: { accessKeyId: E2E_AWS_KEY_ID, secretAccessKey: E2E_AWS_SECRET },
+              })
+            );
+          }),
       },
       {
         name: "the session token went upstream with the signature",

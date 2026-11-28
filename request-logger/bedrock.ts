@@ -226,7 +226,7 @@ export function createCredentialProvider(
           cached = {
             creds,
             validUntil: creds.expiresAtMs
-              ? creds.expiresAtMs - EXPIRY_MARGIN_MS
+              ? Math.max(creds.expiresAtMs - EXPIRY_MARGIN_MS, clock() + RELOAD_FLOOR_MS)
               : clock() + UNDATED_TTL_MS,
             loadedAt: clock(),
           };
@@ -348,7 +348,8 @@ export function decodeBedrockStream(
     if (messageType === "event" && headers[":event-type"] === "chunk") {
       try {
         const json = Buffer.from(JSON.parse(text).bytes, "base64").toString("utf8");
-        events.push(`event: ${JSON.parse(json).type}\ndata: ${json}\n`);
+        const { type } = JSON.parse(json);
+        events.push(`${typeof type === "string" ? `event: ${type}\n` : ""}data: ${json}\n`);
       } catch {
         errors.push(`a chunk that is not JSON: ${text.slice(0, 200)}`);
       }

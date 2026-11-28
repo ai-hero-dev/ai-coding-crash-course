@@ -213,7 +213,22 @@ function forwardHeaders(
   return out;
 }
 
-let awsCredentials: ReturnType<typeof createCredentialProvider> | null = null;
+const credentialProviders = new WeakMap<
+  NodeJS.ProcessEnv,
+  ReturnType<typeof createCredentialProvider>
+>();
+
+function credentialsFor(env: NodeJS.ProcessEnv) {
+  let provider = credentialProviders.get(env);
+  if (!provider) {
+    provider = createCredentialProvider(env);
+    credentialProviders.set(env, provider);
+  }
+  return provider;
+}
+
+const shown = (value: string | undefined) =>
+  JSON.stringify(value && value.length > 120 ? `${value.slice(0, 120)}...` : value ?? "");
 
 export async function signedHeaders(
   target: ProxyTarget,
@@ -225,8 +240,7 @@ export async function signedHeaders(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<{ headers: http.OutgoingHttpHeaders; credentials?: AwsCredentials }> {
   if (target.kind !== "target" || !target.awsSigning) return { headers };
-  awsCredentials ??= createCredentialProvider(env);
-  const credentials = await awsCredentials.get();
+  const credentials = await credentialsFor(env).get();
   const kept: http.OutgoingHttpHeaders = {};
   for (const [key, value] of Object.entries(headers)) {
     const k = key.toLowerCase();
@@ -268,15 +282,15 @@ export function refuseBrowserCaller(
   }
   const fetchSite = headers["sec-fetch-site"];
   if (fetchSite !== undefined && fetchSite !== "none") {
-    return `its Sec-Fetch-Site is "${fetchSite}", so a web page sent it`;
+    return `its Sec-Fetch-Site is ${shown(fetchSite)}, so a web page sent it`;
   }
   if (headers.origin !== undefined) {
-    return `it has an Origin header (${headers.origin}), so a web page sent it`;
+    return `it has an Origin header (${shown(headers.origin)}), so a web page sent it`;
   }
   const host = (headers.host ?? "").toLowerCase();
   const loopback = ["localhost", "127.0.0.1", "[::1]"].map((h) => `${h}:${port}`);
   if (!loopback.includes(host)) {
-    return `its Host header is "${headers.host ?? ""}", not localhost:${port}`;
+    return `its Host header is ${shown(headers.host)}, not localhost:${port}`;
   }
   return null;
 }
@@ -289,7 +303,7 @@ function handle(
   const refused = refuseBrowserCaller(target, req.method, req.headers, PORT);
   if (refused) {
     console.warn(
-      `[request-logger] refused ${req.method ?? "GET"} ${req.url ?? "/"}: ${refused}. ` +
+      `[request-logger] refused ${req.method ?? "GET"} ${shown(req.url)}: ${refused}. ` +
         "This route signs with your AWS credentials, so only an agent on this machine may use it."
     );
     res.writeHead(403, { "content-type": "application/json" });
@@ -320,7 +334,7 @@ function handle(
     let signedWith: AwsCredentials | undefined;
     const onUpstreamResponse = (upstreamRes: http.IncomingMessage) => {
       if (upstreamRes.statusCode === 403 && signedWith) {
-        awsCredentials?.invalidate(signedWith);
+        credentialsFor(process.env).invalidate(signedWith);
       }
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       const responseChunks: Buffer[] = [];
