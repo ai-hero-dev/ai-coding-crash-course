@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
@@ -319,6 +322,18 @@ describe("createCredentialProvider", () => {
     now = 10_000;
     await provider.get().catch(() => {});
     expect(calls).toBe(2);
+  });
+
+  it.each([
+    ["is stopped by a signal", "#!/bin/sh\nkill -9 $$\n", 0o755, "the aws command was stopped by SIGKILL"],
+    ["cannot be executed", "#!/bin/sh\nexit 0\n", 0o644, "the aws command could not be run (EACCES)"],
+    ["exits non-zero", "#!/bin/sh\nexit 255\n", 0o755, "the aws command exited with code 255"],
+    ["is not installed", null, 0, "the aws command is not installed"],
+  ] as const)("says so plainly when the aws command %s", async (_name, script, mode, expected) => {
+    const onlyFakeAws = fs.mkdtempSync(path.join(os.tmpdir(), "request-logger-aws-"));
+    if (script) fs.writeFileSync(path.join(onlyFakeAws, "aws"), script, { mode });
+    const error = await createCredentialProvider({ PATH: onlyFakeAws }).get().catch((e: Error) => e);
+    expect((error as Error).message).toContain(expected);
   });
 
   it("never quotes the AWS CLI's output in its error, which could hold a secret", async () => {

@@ -170,14 +170,21 @@ const runAwsCli: Exec = (env) =>
       { env, timeout: AWS_CLI_TIMEOUT_MS },
       (err, stdout) => {
         if (!err) return resolve(stdout);
-        const code = (err as NodeJS.ErrnoException).code;
+        const { code, signal, killed } = err as NodeJS.ErrnoException & {
+          signal?: NodeJS.Signals | null;
+          killed?: boolean;
+        };
         reject(
           new Error(
             code === "ENOENT"
               ? "the aws command is not installed"
-              : err.killed
+              : killed
                 ? `the aws command timed out after ${AWS_CLI_TIMEOUT_MS / 1000}s`
-                : `the aws command exited with code ${code}`
+                : signal
+                  ? `the aws command was stopped by ${signal}`
+                  : typeof code === "number"
+                    ? `the aws command exited with code ${code}`
+                    : `the aws command could not be run (${code ?? "unknown error"})`
           )
         );
       }
