@@ -6,6 +6,7 @@
  *
  *   POST …/messages            Anthropic Messages (SSE or JSON)
  *   POST …:streamRawPredict    the same, as Claude on Vertex AI routes it
+ *   POST /model/{id}/invoke…   the same, as Bedrock's binary event stream
  *   POST …/chat/completions    OpenAI chat completions (SSE or JSON); with
  *                              chat: "mistral", Mistral's list-shaped
  *                              content (a thinking chunk, then text)
@@ -17,6 +18,7 @@
  */
 
 import http from "node:http";
+import zlib from "node:zlib";
 import type { AddressInfo } from "node:net";
 
 export const CANNED_REPLY = "CANNED-REPLY-FROM-FAKE-UPSTREAM";
@@ -32,7 +34,12 @@ export interface SeenRequest {
   body: string;
   /** Which shape the fake answered in, or null for a 404. */
   answeredAs:
-    "anthropic" | "openai-chat" | "openai-responses" | "models" | null;
+    | "anthropic"
+    | "bedrock"
+    | "openai-chat"
+    | "openai-responses"
+    | "models"
+    | null;
   streamed: boolean;
 }
 
@@ -77,7 +84,7 @@ function json(res: http.ServerResponse, status: number, data: unknown): void {
   res.end(JSON.stringify(data));
 }
 
-function anthropic(res: http.ServerResponse, req: any, stream: boolean): void {
+function anthropicReply(req: any) {
   const model = req.model ?? FAKE_MODEL;
   const usage = { input_tokens: 1, output_tokens: 1 };
   const message = {
@@ -90,12 +97,11 @@ function anthropic(res: http.ServerResponse, req: any, stream: boolean): void {
     stop_sequence: null,
     usage,
   };
-  if (!stream) return json(res, 200, message);
   const e = (type: string, data: object) => ({
     event: type,
     data: { type, ...data },
   });
-  sse(res, [
+  const events = [
     e("message_start", {
       message: { ...message, content: [], stop_reason: null, usage },
     }),
@@ -113,7 +119,80 @@ function anthropic(res: http.ServerResponse, req: any, stream: boolean): void {
       usage: { output_tokens: 1 },
     }),
     e("message_stop", {}),
-  ]);
+  ];
+  return { message, events };
+}
+
+function anthropic(res: http.ServerResponse, req: any, stream: boolean): void {
+  const { message, events } = anthropicReply(req);
+  if (!stream) return json(res, 200, message);
+  sse(res, events);
+}
+
+const STRING_HEADER_TYPE = 7;
+
+export function eventStreamMessage(
+  headers: Record<string, string>,
+  payload: string | Buffer
+): Buffer {
+  const encodedHeaders = Buffer.concat(
+    Object.entries(headers).map(([name, value]) => {
+      const n = Buffer.from(name, "utf8");
+      const v = Buffer.from(value, "utf8");
+      const out = Buffer.alloc(4 + n.length + v.length);
+      out.writeUInt8(n.length, 0);
+      n.copy(out, 1);
+      out.writeUInt8(STRING_HEADER_TYPE, 1 + n.length);
+      out.writeUInt16BE(v.length, 2 + n.length);
+      v.copy(out, 4 + n.length);
+      return out;
+    })
+  );
+  const body = Buffer.from(payload);
+  const prelude = Buffer.alloc(12);
+  prelude.writeUInt32BE(12 + encodedHeaders.length + body.length + 4, 0);
+  prelude.writeUInt32BE(encodedHeaders.length, 4);
+  prelude.writeUInt32BE(zlib.crc32(prelude.subarray(0, 8)), 8);
+  const message = Buffer.concat([prelude, encodedHeaders, body]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(zlib.crc32(message), 0);
+  return Buffer.concat([message, crc]);
+}
+
+export function bedrockChunk(event: object): Buffer {
+  return eventStreamMessage(
+    {
+      ":event-type": "chunk",
+      ":content-type": "application/json",
+      ":message-type": "event",
+    },
+    JSON.stringify({
+      bytes: Buffer.from(JSON.stringify(event)).toString("base64"),
+      p: "abcdefghij",
+    })
+  );
+}
+
+export function bedrockException(type: string, message: string): Buffer {
+  return eventStreamMessage(
+    {
+      ":exception-type": type,
+      ":content-type": "application/json",
+      ":message-type": "exception",
+    },
+    JSON.stringify({ message })
+  );
+}
+
+function bedrock(res: http.ServerResponse, req: any, stream: boolean): void {
+  const { message, events } = anthropicReply(req);
+  if (!stream) return json(res, 200, message);
+  res.writeHead(200, {
+    "content-type": "application/vnd.amazon.eventstream",
+    "x-amzn-bedrock-content-type": "application/json",
+  });
+  for (const { data } of events) res.write(bedrockChunk(data));
+  res.end();
 }
 
 function openaiChat(
@@ -290,6 +369,13 @@ export function startFakeUpstream(
         const s = /:streamRawPredict$/i.test(pathname) || stream;
         answer("anthropic", s);
         return anthropic(res, parsed, s);
+      }
+      const onBedrock = pathname.match(
+        /^\/model\/[^/]+\/invoke(-with-response-stream)?$/
+      );
+      if (req.method === "POST" && onBedrock) {
+        answer("bedrock", Boolean(onBedrock[1]));
+        return bedrock(res, parsed, Boolean(onBedrock[1]));
       }
       if (req.method === "POST" && pathname.endsWith("/messages")) {
         answer("anthropic", stream);
