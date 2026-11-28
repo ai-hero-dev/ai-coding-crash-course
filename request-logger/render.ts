@@ -17,6 +17,7 @@
 
 import zlib from "node:zlib";
 import type { RendererId } from "./agents";
+import { decodeBedrockStream } from "./bedrock";
 
 interface RenderInput {
   /** Human label for the capture, e.g. "Claude Code" or "Pi (ChatGPT)". */
@@ -31,7 +32,7 @@ interface RenderInput {
   requestBody: Buffer;
   /** The request's content-encoding header, if it had one. */
   requestEncoding?: string;
-  responseRaw: string;
+  responseRaw: string | Buffer;
 }
 
 const REDACT = new Set([
@@ -39,6 +40,7 @@ const REDACT = new Set([
   "x-api-key",
   "api-key",
   "x-goog-api-key",
+  "x-amz-security-token",
 ]);
 
 /**
@@ -125,11 +127,19 @@ export function renderMarkdown(input: RenderInput): string {
   );
 }
 
-/** Most APIs name the model in the body. Gemini names it in the URL. */
+/** Most APIs name the model in the body. Gemini, Vertex and Bedrock name it in the URL. */
 function findModel(reqJson: any, path: string): string {
   if (typeof reqJson?.model === "string") return reqJson.model;
   const fromPath = path.match(/models\/([^:/?]+)/);
   if (fromPath) return fromPath[1];
+  const bedrock = path.match(/^\/model\/([^/?]+)\//);
+  if (bedrock) {
+    try {
+      return decodeURIComponent(bedrock[1]);
+    } catch {
+      return bedrock[1];
+    }
+  }
   return "unknown";
 }
 
@@ -740,7 +750,16 @@ function renderMessages(
 // ---------------------------------------------------------------------------
 
 function renderResponse(input: RenderInput, reqJson: any): string {
-  const raw = input.responseRaw;
+  if (Buffer.isBuffer(input.responseRaw)) {
+    const bedrock = decodeBedrockStream(input.responseRaw);
+    if (bedrock) {
+      return [
+        renderResponse({ ...input, responseRaw: bedrock.sse }, reqJson),
+        ...bedrock.errors.map((e) => `**Bedrock stream error:** ${e}`),
+      ].join("\n\n");
+    }
+  }
+  const raw = input.responseRaw.toString("utf8");
   if (raw.trim().length === 0) return "_(empty response)_";
 
   const looksSSE = /(^|\n)\s*(event:|data:)/.test(raw);

@@ -74,6 +74,7 @@ export interface Recipe {
   install(): Promise<InstallResult>;
   /** What the agent needs in its environment besides the printed command. */
   env(ctx: RunContext): Record<string, string>;
+  proxyEnv?(): Record<string, string>;
   /** Appended to the printed command so it runs one prompt and exits. */
   promptArgs(prompt: string): string[];
   /** The path the agent's model call must reach the upstream on. */
@@ -87,7 +88,11 @@ export interface Recipe {
    */
   sendsKey?: boolean;
   /** Checks only this agent needs, run after the shared ones. */
-  extraChecks?(run: { capture: string; seen: SeenRequest[] }): Check[];
+  extraChecks?(run: {
+    capture: string;
+    seen: SeenRequest[];
+    logs: string;
+  }): Check[];
   /** Default 120s. */
   timeoutMs?: number;
 }
@@ -150,6 +155,7 @@ export function startProxy(opts: {
   upstream: string;
   port: number;
   choice: AgentChoice;
+  env?: Record<string, string>;
 }): Promise<StartedProxy> {
   fs.mkdirSync(opts.stateDir, { recursive: true });
   saveChoice(path.join(opts.stateDir, ".agent-choice.json"), opts.choice);
@@ -160,6 +166,7 @@ export function startProxy(opts: {
     {
       env: {
         ...process.env,
+        ...opts.env,
         PORT: String(opts.port),
         NO_COLOR: "1",
         FORCE_COLOR: "0",
@@ -293,6 +300,7 @@ export async function runRecipe(
       upstream: upstream.origin,
       port,
       choice: recipe.choice,
+      env: recipe.proxyEnv?.(),
     });
     log(`proxy on :${port} -> fake upstream ${upstream.origin}`);
     log(`wizard printed: ${proxy.command}`);
@@ -300,6 +308,7 @@ export async function runRecipe(
     const expected = resolveChoice(recipe.choice, {
       port,
       platform: process.platform,
+      env: recipe.proxyEnv?.(),
     });
     if (expected.kind !== "target" && expected.kind !== "custom-target") {
       throw new Error(
@@ -420,7 +429,11 @@ export async function runRecipe(
         name: "the student's own .agent-choice.json and logs/ are untouched",
         ok: studentState() === before,
       },
-      ...(recipe.extraChecks?.({ capture: turn, seen: upstream.seen }) ?? []),
+      ...(recipe.extraChecks?.({
+        capture: turn,
+        seen: upstream.seen,
+        logs: everything,
+      }) ?? []),
     ];
     if (!checks.find((c) => c.name.startsWith("the agent exited"))!.ok) {
       log(`agent output:\n${agentOutput.slice(-4000)}`);

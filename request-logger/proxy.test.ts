@@ -7,8 +7,12 @@ import {
   BURST_THRESHOLD,
   BURST_WINDOW_MS,
   burstKey,
+  listenHosts,
   readSettings,
+  refuseBrowserCaller,
+  refuseNonModelCall,
   rejectUpgrade,
+  signedHeaders,
   TEST_DIR_ENV,
   TEST_UPSTREAM_ENV,
   trackBurst,
@@ -417,5 +421,136 @@ describe("upstreamConnection with the test-only upstream override", () => {
       port: 443,
       useHttps: true,
     });
+  });
+});
+
+function bedrockSigningTarget() {
+  const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+  if (target.kind !== "target") throw new Error("expected a catalogue target");
+  return {
+    ...target,
+    upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
+    awsSigning: { region: "us-east-1", service: "bedrock" },
+  };
+}
+
+describe("signedHeaders", () => {
+  const env = { AWS_ACCESS_KEY_ID: "AKID", AWS_SECRET_ACCESS_KEY: "SECRET" };
+
+  it("replaces any signature the agent made with a fresh one, and says which credentials signed", async () => {
+    const { headers, credentials } = await signedHeaders(
+      bedrockSigningTarget(),
+      {
+        authorization: "AWS4-HMAC-SHA256 old",
+        "x-amz-date": "old",
+        "x-amz-security-token": "old",
+        "content-type": "application/json",
+      },
+      "POST",
+      "bedrock-runtime.us-east-1.amazonaws.com",
+      "/model/m/invoke",
+      Buffer.from("{}"),
+      env
+    );
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers.authorization).toMatch(
+      /^AWS4-HMAC-SHA256 Credential=AKID\/\d{8}\/us-east-1\/bedrock\/aws4_request, /
+    );
+    expect(headers["x-amz-date"]).not.toBe("old");
+    expect(headers).not.toHaveProperty("x-amz-security-token");
+    expect(credentials?.accessKeyId).toBe("AKID");
+  });
+
+  it("signs with the credentials of the env it is given, on every call", async () => {
+    const sign = (env: NodeJS.ProcessEnv) =>
+      signedHeaders(bedrockSigningTarget(), {}, "POST", "h", "/p", Buffer.alloc(0), env);
+    expect((await sign({ AWS_ACCESS_KEY_ID: "ONE", AWS_SECRET_ACCESS_KEY: "s" })).credentials?.accessKeyId).toBe("ONE");
+    expect((await sign({ AWS_ACCESS_KEY_ID: "TWO", AWS_SECRET_ACCESS_KEY: "s" })).credentials?.accessKeyId).toBe("TWO");
+  });
+
+  it("hands every other target its headers back untouched, unsigned", async () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    const headers = { authorization: "Bearer keep", "x-amz-foo": "keep" };
+    const out = await signedHeaders(target, headers, "POST", "h", "/p", Buffer.alloc(0), env);
+    expect(out.headers).toBe(headers);
+    expect(out.credentials).toBeUndefined();
+  });
+});
+
+describe("listenHosts", () => {
+  it("keeps a signing target on loopback only, IPv4 and IPv6", () => {
+    expect(listenHosts(bedrockSigningTarget())).toEqual(["127.0.0.1", "::1"]);
+  });
+
+  it("does not change where every other target listens", () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    expect(listenHosts(target)).toEqual([undefined]);
+  });
+});
+
+describe("refuseBrowserCaller", () => {
+  const refuse = (method: string | undefined, headers: Record<string, string | undefined>) =>
+    refuseBrowserCaller(bedrockSigningTarget(), headers, 8787) ??
+    refuseNonModelCall(bedrockSigningTarget(), method, "/model/m/invoke");
+
+  it("lets an agent on this machine through", () => {
+    for (const host of ["localhost:8787", "127.0.0.1:8787", "[::1]:8787", "LOCALHOST:8787"]) {
+      expect(refuse("POST", { host })).toBeNull();
+    }
+    expect(refuse("POST", { host: "localhost:8787", "sec-fetch-site": "none" })).toBeNull();
+  });
+
+  it("refuses a request a web page sent, which always has an Origin", () => {
+    expect(refuse("POST", { host: "localhost:8787", origin: "https://evil.example" })).toContain("Origin");
+  });
+
+  it("refuses a cross-site request a browser marked, even a GET with no Origin", () => {
+    for (const site of ["cross-site", "same-site", "same-origin"]) {
+      expect(refuse("POST", { host: "localhost:8787", "sec-fetch-site": site })).toContain("Sec-Fetch-Site");
+    }
+  });
+
+  it("refuses anything but a POST", () => {
+    for (const method of ["GET", "HEAD", "PUT", "DELETE", undefined]) {
+      expect(refuse(method, { host: "localhost:8787" })).toContain("not a Bedrock model call");
+    }
+  });
+
+  it("quotes at most 120 characters of a header it refuses", () => {
+    const reason = refuse("POST", { host: "localhost:8787", origin: `https://${"a".repeat(5000)}` });
+    expect(reason!.length).toBeLessThan(200);
+    expect(reason).toContain('..."');
+  });
+
+  it("accepts a Host with no port when the proxy listens on port 80", () => {
+    expect(refuseBrowserCaller(bedrockSigningTarget(), { host: "localhost" }, 80)).toBeNull();
+    expect(refuseBrowserCaller(bedrockSigningTarget(), { host: "localhost:80" }, 80)).toBeNull();
+    expect(refuseBrowserCaller(bedrockSigningTarget(), { host: "localhost" }, 8787)).toContain("Host");
+  });
+
+  it("refuses a rebound hostname, a wrong port or no Host at all", () => {
+    for (const host of ["evil.example:8787", "localhost:9999", undefined]) {
+      expect(refuse("POST", { host })).toContain("Host");
+    }
+  });
+
+  it("never refuses a target that signs nothing", () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    expect(
+      refuseBrowserCaller(target, { host: "evil.example", origin: "https://x", "sec-fetch-site": "cross-site" }, 8787)
+    ).toBeNull();
+  });
+});
+
+describe("refuseNonModelCall", () => {
+  it("lets a model call through and refuses any other path on the signing route", () => {
+    expect(refuseNonModelCall(bedrockSigningTarget(), "POST", "/model/m/invoke-with-response-stream")).toBeNull();
+    expect(refuseNonModelCall(bedrockSigningTarget(), "POST", "/async-invoke")).toContain("not a Bedrock model call");
+    expect(refuseNonModelCall(bedrockSigningTarget(), "GET", "/model/m/invoke")).toContain("not a Bedrock model call");
+  });
+
+  it("never refuses a target that signs nothing", () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    expect(refuseNonModelCall(target, "GET", "/anything")).toBeNull();
   });
 });

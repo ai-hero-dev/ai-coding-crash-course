@@ -1,4 +1,6 @@
-import type { Recipe } from "../driver";
+import crypto from "node:crypto";
+import { authorizationFor } from "../../bedrock";
+import { DUMMY_KEY, type Recipe } from "../driver";
 import { npmTool } from "../install";
 
 const VERSION = "2.1.318";
@@ -46,4 +48,105 @@ export const claudeCodeVertex: Recipe = {
   modelPath:
     /^\/v1\/projects\/[^/]+\/locations\/global\/publishers\/anthropic\/models\/[^/]+:streamRawPredict$/,
   sendsKey: false,
+};
+
+export const E2E_AWS_KEY_ID = "AKIDE2EEXAMPLE000000";
+export const E2E_AWS_SECRET = "e2e-secret-access-key-not-a-real-one";
+export const E2E_AWS_SESSION_TOKEN = "e2e-session-token-not-a-real-one";
+
+const bedrockAgentEnv = {
+  CLAUDE_CODE_USE_BEDROCK: "1",
+  AWS_REGION: "us-east-1",
+  DISABLE_AUTOUPDATER: "1",
+  DISABLE_TELEMETRY: "1",
+  DISABLE_ERROR_REPORTING: "1",
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+};
+
+const BEDROCK_MODEL_PATH = /^\/model\/[^/]+\/invoke-with-response-stream$/;
+
+export const claudeCodeBedrock: Recipe = {
+  name: "claude-code/bedrock",
+  choice: { agent: "claude-code", provider: "bedrock" },
+  install: claudeCode.install,
+  proxyEnv: () => ({
+    AWS_REGION: "us-east-1",
+    AWS_ACCESS_KEY_ID: E2E_AWS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: E2E_AWS_SECRET,
+    AWS_SESSION_TOKEN: E2E_AWS_SESSION_TOKEN,
+  }),
+  env: () => bedrockAgentEnv,
+  promptArgs: claudeCode.promptArgs,
+  modelPath: BEDROCK_MODEL_PATH,
+  sendsKey: false,
+  extraChecks: ({ seen, logs }) => {
+    const calls = seen.filter((r) => BEDROCK_MODEL_PATH.test(r.url));
+    return [
+      {
+        name: "every request Claude Code made was a POST, which the signing route requires",
+        ok: seen.length > 0 && seen.every((r) => r.method === "POST"),
+      },
+      {
+        name: "each signature verifies against the host, path, headers and body the upstream received",
+        ok:
+          calls.length > 0 &&
+          calls.every((r) => {
+            const date = String(r.headers["x-amz-date"]);
+            return (
+              r.headers.authorization ===
+              authorizationFor({
+                method: r.method,
+                path: r.url,
+                headers: {
+                  host: String(r.headers.host),
+                  "x-amz-content-sha256": crypto.createHash("sha256").update(r.body).digest("hex"),
+                  "x-amz-date": date,
+                  "x-amz-security-token": E2E_AWS_SESSION_TOKEN,
+                },
+                payloadHash: crypto.createHash("sha256").update(r.body).digest("hex"),
+                amzDate: date,
+                region: "us-east-1",
+                service: "bedrock",
+                credentials: { accessKeyId: E2E_AWS_KEY_ID, secretAccessKey: E2E_AWS_SECRET },
+              })
+            );
+          }),
+      },
+      {
+        name: "the session token went upstream with the signature",
+        ok: calls.every(
+          (r) => r.headers["x-amz-security-token"] === E2E_AWS_SESSION_TOKEN
+        ),
+      },
+      {
+        name: "the AWS secret and session token appear in no log file",
+        ok: !logs.includes(E2E_AWS_SECRET) && !logs.includes(E2E_AWS_SESSION_TOKEN),
+      },
+    ];
+  },
+};
+
+export const claudeCodeBedrockApiKey: Recipe = {
+  name: "claude-code/bedrock-api-key",
+  choice: { agent: "claude-code", provider: "bedrock-api-key" },
+  install: claudeCode.install,
+  proxyEnv: () => ({ AWS_REGION: "us-east-1" }),
+  env: ({ key }) => ({ ...bedrockAgentEnv, AWS_BEARER_TOKEN_BEDROCK: key }),
+  promptArgs: claudeCode.promptArgs,
+  modelPath: BEDROCK_MODEL_PATH,
+  extraChecks: ({ seen }) => {
+    const calls = seen.filter((r) => BEDROCK_MODEL_PATH.test(r.url));
+    return [
+      {
+        name: "the proxy signed nothing: the agent's own Bearer header went upstream",
+        ok:
+          calls.length > 0 &&
+          calls.every(
+            (r) =>
+              r.headers.authorization === `Bearer ${DUMMY_KEY}` &&
+              r.headers["x-amz-date"] === undefined
+          ),
+      },
+    ];
+  },
 };

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import zlib from "node:zlib";
 import { decodeRequestBody, renderMarkdown } from "./render";
+import { bedrockChunk, bedrockException } from "./e2e/fake-upstream";
 
 const BASE = {
   timestamp: "2026-08-06T10:00:00.000Z",
@@ -539,5 +540,67 @@ describe("renderMarkdown header redaction", () => {
     });
     expect(out).not.toContain("secret-goog-key");
     expect(out).toContain("[REDACTED]");
+  });
+});
+
+describe("a Claude Code capture from Amazon Bedrock", () => {
+  const path =
+    "/model/us.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream";
+  const stream = [
+    { type: "message_start", message: { usage: { input_tokens: 3 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello from " } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Bedrock" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } },
+    { type: "message_stop" },
+  ].map(bedrockChunk);
+
+  const render = (responseRaw: Buffer, headers = {}) =>
+    renderMarkdown({
+      agent: "Claude Code",
+      renderer: "anthropic",
+      timestamp: "2026-11-28T10:00:00.000Z",
+      method: "POST",
+      path,
+      statusCode: 200,
+      headers,
+      requestBody: Buffer.from(
+        JSON.stringify({
+          anthropic_version: "bedrock-2023-05-31",
+          max_tokens: 10,
+          messages: [{ role: "user", content: "hello" }],
+        })
+      ),
+      responseRaw,
+    });
+
+  it("reads the model out of the URL, decoded", () => {
+    expect(render(Buffer.concat(stream))).toContain(
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    );
+  });
+
+  it("reassembles the reply from the binary event stream", () => {
+    const md = render(Buffer.concat(stream));
+    expect(md).toContain("<assistant-text>\n\nHello from Bedrock");
+    expect(md).not.toContain("Bedrock stream error");
+  });
+
+  it("shows the exception Bedrock sent part-way through, by name", () => {
+    const md = render(
+      Buffer.concat([...stream.slice(0, 3), bedrockException("throttlingException", "Slow down")])
+    );
+    expect(md).toContain("Hello from ");
+    expect(md).toContain("**Bedrock stream error:** throttlingException: Slow down");
+  });
+
+  it("never shows the AWS session token or the signature", () => {
+    const md = render(Buffer.concat(stream), {
+      "x-amz-security-token": "VERY-SECRET-TOKEN",
+      authorization: "AWS4-HMAC-SHA256 Credential=AKID/x, Signature=SIG123",
+    });
+    expect(md).not.toContain("VERY-SECRET-TOKEN");
+    expect(md).not.toContain("SIG123");
   });
 });

@@ -106,7 +106,7 @@ from this table. It is here so you can see what is supported before you start.
 
 | Agent           | Works | What you need                                                                            |
 | --------------- | ----- | ---------------------------------------------------------------------------------------- |
-| Claude Code     | Yes   | One command. Works with a subscription login, an Anthropic API key, or Google Vertex AI. |
+| Claude Code     | Yes   | One command. Subscription login, Anthropic API key, Google Vertex AI or Amazon Bedrock.  |
 | Codex           | Yes   | One flag. A subscription or an API key works.                                            |
 | GitHub Copilot  | Yes   | Your normal subscription login.                                                          |
 | OpenCode        | Yes   | One command, or a config file.                                                           |
@@ -148,6 +148,18 @@ Code builds its request paths from that variable. The answer is saved with the
 rest of your choice; if `CLOUD_ML_REGION` in the shell that starts
 request-logger differs from it, a note is printed. Run with `--force` to pick a
 different region.
+
+### Claude Code on Amazon Bedrock
+
+If your Claude Code runs with `CLAUDE_CODE_USE_BEDROCK=1`, pick **Amazon Bedrock (AWS credentials)** at the provider question.
+
+Bedrock signs every request with AWS SigV4, and the signature covers the `Host` header, so a request Claude Code signs for `localhost` is rejected once it is forwarded. The command this tool prints sets `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`, so Claude Code sends no signature, and the proxy signs each request itself with your own AWS credentials. It also decodes Bedrock's binary event stream back into the readable reply.
+
+Start request-logger in a shell with the same `AWS_REGION` and `AWS_PROFILE` you run Claude Code with, and run `aws sso login` first if your session has expired. Credentials come from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` if both are set, otherwise from `aws configure export-credentials` (AWS CLI v2). They are held in memory only and never written to disk.
+
+If you use a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) instead, pick **Amazon Bedrock (API key)**. The key travels in Claude Code's own `Authorization` header and passes through unchanged, so the proxy signs nothing and holds no credentials. The printed command leaves out `CLAUDE_CODE_SKIP_BEDROCK_AUTH`, because that would make Claude Code drop the key. You still need `AWS_REGION` in the shell, and the `Authorization` header is redacted in the captures.
+
+On the AWS credentials route the proxy signs with your AWS credentials, so it listens on `127.0.0.1` and `::1` only, never on the network. It signs only Bedrock model calls (`/model/{id}/invoke`, `invoke-with-response-stream`, `converse`, `converse-stream` and `count-tokens`), and refuses anything but a POST, any request a browser marks with `Sec-Fetch-Site`, and any request with an `Origin` header or with a `Host` other than `localhost`, `127.0.0.1` or `[::1]` on its port, so a web page open in your browser cannot use it to call Bedrock as you. Any program or other user on the same machine can still reach it while it runs, so do not leave it running on a shared machine. Because it listens on loopback only, Claude Code in a Docker or dev container cannot reach it on the host: run request-logger inside the same container. Not supported: a company gateway or VPC endpoint in place of `bedrock-runtime.<region>.amazonaws.com`. The captures in `logs/` contain your whole conversation, so do not share or commit them.
 
 ### Antigravity CLI
 
