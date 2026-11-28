@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   agentProviders,
+  bedrockApiKeyUpstream,
+  bedrockUpstream,
   CUSTOM_ID,
   customTargetNeedsModel,
   ISSUE_URL,
@@ -166,10 +168,12 @@ describe("listProviders", () => {
     expect(listProviders("cursor")).toEqual([]);
   });
 
-  it("returns both Claude Code providers", () => {
+  it("returns all four Claude Code providers", () => {
     expect(listProviders("claude-code").map((p) => p.id)).toEqual([
       "anthropic",
       "vertex",
+      "bedrock",
+      "bedrock-api-key",
     ]);
   });
 
@@ -1753,5 +1757,92 @@ describe("resolveChoice — Mistral Vibe", () => {
     expect(JSON.parse(envFrom(result.command, "VIBE_PROVIDERS"))).toEqual(
       VIBE_PROVIDERS
     );
+  });
+});
+
+describe("Claude Code on Amazon Bedrock", () => {
+  const claude = { agent: "claude-code" };
+  const bedrock = (provider: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "linux") => {
+    const result = resolveChoice({ agent: "claude-code", provider }, { port: 8787, platform, env });
+    if (result.kind !== "target") throw new Error(`expected a target, got ${result.kind}`);
+    return result;
+  };
+
+  for (const [name, upstream] of [
+    ["bedrockUpstream", bedrockUpstream],
+    ["bedrockApiKeyUpstream", bedrockApiKeyUpstream],
+  ] as const) {
+    describe(name, () => {
+      it("asks for AWS_REGION rather than guessing one", () => {
+        expect(upstream(claude, {})).toMatchObject({ error: expect.stringContaining("AWS_REGION") });
+      });
+
+      it("refuses a region that would change the hostname", () => {
+        expect(upstream(claude, { AWS_REGION: "x.evil.com/" })).toHaveProperty("error");
+      });
+
+      it("forwards to bedrock-runtime in that region, and falls back to AWS_DEFAULT_REGION", () => {
+        expect(upstream(claude, { AWS_REGION: "eu-west-1" })).toMatchObject({
+          host: "bedrock-runtime.eu-west-1.amazonaws.com",
+        });
+        expect(upstream(claude, { AWS_DEFAULT_REGION: "us-west-2" })).toMatchObject({
+          host: "bedrock-runtime.us-west-2.amazonaws.com",
+        });
+      });
+    });
+  }
+
+  it("signs for bedrock on the AWS-credentials route only", () => {
+    expect(bedrock("bedrock", { AWS_REGION: "eu-west-1" }).awsSigning).toEqual({
+      region: "eu-west-1",
+      service: "bedrock",
+    });
+    expect(bedrock("bedrock-api-key", { AWS_REGION: "eu-west-1" })).not.toHaveProperty("awsSigning");
+    expect(target("claude-code", "anthropic")).not.toHaveProperty("awsSigning");
+  });
+
+  it("says which credentials it will sign with", () => {
+    const notes = (env: NodeJS.ProcessEnv) => bedrock("bedrock", { AWS_REGION: "us-east-1", ...env }).notes.join(" ");
+    expect(notes({ AWS_PROFILE: "work" })).toContain('AWS profile "work"');
+    expect(notes({ AWS_ACCESS_KEY_ID: "A", AWS_SECRET_ACCESS_KEY: "S" })).toContain("AWS_ACCESS_KEY_ID");
+  });
+
+  it("names the AWS CLI when the key ID has no secret to go with it", () => {
+    const up = bedrockUpstream(claude, { AWS_REGION: "us-east-1", AWS_ACCESS_KEY_ID: "A" });
+    expect("notes" in up && up.notes[0]).toContain("via the AWS CLI");
+  });
+
+  it("points a student with a Bedrock API key at the API-key route", () => {
+    const notes = (env: NodeJS.ProcessEnv) => {
+      const up = bedrockUpstream(claude, { AWS_REGION: "us-east-1", ...env });
+      return "notes" in up ? up.notes.join(" ") : "";
+    };
+    expect(notes({ AWS_BEARER_TOKEN_BEDROCK: "k" })).toContain("Amazon Bedrock (API key)");
+    expect(notes({})).not.toContain("API key");
+  });
+
+  it("prints the Bedrock base URL and turns Claude Code's own signing off", () => {
+    expect(bedrock("bedrock", { AWS_REGION: "us-east-1" }).command).toBe(
+      "ANTHROPIC_BEDROCK_BASE_URL=http://localhost:8787 CLAUDE_CODE_SKIP_BEDROCK_AUTH=1 ENABLE_TOOL_SEARCH=true claude"
+    );
+    expect(bedrock("bedrock", { AWS_REGION: "us-east-1" }, "win32").command).toContain(
+      "$env:CLAUDE_CODE_SKIP_BEDROCK_AUTH = '1'"
+    );
+  });
+
+  it("leaves Claude Code's auth on for the API key, which the skip flag would drop", () => {
+    expect(bedrock("bedrock-api-key", { AWS_REGION: "us-east-1" }).command).toBe(
+      "ANTHROPIC_BEDROCK_BASE_URL=http://localhost:8787 ENABLE_TOOL_SEARCH=true claude"
+    );
+    expect(bedrock("bedrock-api-key", { AWS_REGION: "us-east-1" }, "win32").command).toContain(
+      "$env:ANTHROPIC_BEDROCK_BASE_URL = 'http://localhost:8787'"
+    );
+  });
+
+  it("reads Bedrock's wire format with the anthropic renderer, and logs the model call", () => {
+    expect(bedrock("bedrock", { AWS_REGION: "us-east-1" }).renderer).toBe("anthropic");
+    expect(
+      shouldLogRequest("POST", "/model/us.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream", "anthropic")
+    ).toBe(true);
   });
 });

@@ -528,6 +528,76 @@ export function vertexUpstream(
   return { host, pathPrefix: "/v1", notes };
 }
 
+function bedrockRegion(
+  env: NodeJS.ProcessEnv
+): { region: string } | { error: string } {
+  const raw = (env.AWS_REGION || env.AWS_DEFAULT_REGION || "").trim();
+  if (!raw) {
+    return {
+      error:
+        "Claude Code on Amazon Bedrock needs AWS_REGION, and it is not set in " +
+        "this shell. Export the same AWS_REGION you run Claude Code with " +
+        "(e.g. us-east-1), then start request-logger again.",
+    };
+  }
+  const region = raw.toLowerCase();
+  if (!/^[a-z]{2}(-[a-z]+)+-\d+$/.test(region)) {
+    return {
+      error: `AWS_REGION is "${raw}", which is not an AWS region such as us-east-1.`,
+    };
+  }
+  return { region };
+}
+
+const bedrockHost = (region: string) =>
+  `bedrock-runtime.${region}.amazonaws.com`;
+
+export function bedrockUpstream(
+  _choice: AgentChoice,
+  env: NodeJS.ProcessEnv
+):
+  | { host: string; notes: string[]; awsSigning: AwsSigning }
+  | { error: string } {
+  const found = bedrockRegion(env);
+  if ("error" in found) return found;
+  const { region } = found;
+  const profile = env.AWS_PROFILE?.trim();
+  return {
+    host: bedrockHost(region),
+    awsSigning: { region, service: "bedrock" },
+    notes: [
+      `Forwarding to Bedrock in "${region}" (AWS_REGION), signing with ` +
+        (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY
+          ? "the AWS_ACCESS_KEY_ID in this shell."
+          : profile
+            ? `AWS profile "${profile}" (AWS_PROFILE), via the AWS CLI.`
+            : "your default AWS credentials, via the AWS CLI."),
+      ...(env.AWS_BEARER_TOKEN_BEDROCK
+        ? [
+            "AWS_BEARER_TOKEN_BEDROCK is set in this shell. If you run Claude " +
+              "Code with that API key, start again and pick Amazon Bedrock " +
+              "(API key) instead.",
+          ]
+        : []),
+    ],
+  };
+}
+
+export function bedrockApiKeyUpstream(
+  _choice: AgentChoice,
+  env: NodeJS.ProcessEnv
+): { host: string; notes: string[] } | { error: string } {
+  const found = bedrockRegion(env);
+  if ("error" in found) return found;
+  return {
+    host: bedrockHost(found.region),
+    notes: [
+      `Forwarding to Bedrock in "${found.region}" (AWS_REGION). Your API key ` +
+        "passes through as sent and nothing is signed.",
+    ],
+  };
+}
+
 /**
  * Ordered by popularity, decided 2026-08-06. The wizard shows them in this
  * order, so a student is most likely to find theirs first.
@@ -604,6 +674,54 @@ const AGENTS: AgentEntry[] = [
           "ENABLE_TOOL_SEARCH=true matters here for the same reason it does on " +
             "the plain Anthropic route above: a non-default host turns off tool " +
             "search unless this is set.",
+        ],
+      },
+      {
+        id: "bedrock",
+        label: "Amazon Bedrock (AWS credentials)",
+        upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
+        resolveUpstream: bedrockUpstream,
+        // https://code.claude.com/docs/en/amazon-bedrock
+        renderer: "anthropic",
+        env: [
+          ["ANTHROPIC_BEDROCK_BASE_URL", "{baseUrl}"],
+          ["CLAUDE_CODE_SKIP_BEDROCK_AUTH", "1"],
+          ["ENABLE_TOOL_SEARCH", "true"],
+        ],
+        bin: "claude",
+        notes: [
+          "This assumes CLAUDE_CODE_USE_BEDROCK=1 is already exported in your " +
+            "shell. In Bedrock mode Claude Code ignores ANTHROPIC_BASE_URL and " +
+            "reads ANTHROPIC_BEDROCK_BASE_URL instead.",
+          "request-logger signs each request with your own AWS credentials, so " +
+            "start it with the same AWS_PROFILE and AWS_REGION you run Claude " +
+            "Code with. It needs the AWS CLI (v2) unless AWS_ACCESS_KEY_ID and " +
+            "AWS_SECRET_ACCESS_KEY are set. If your SSO session has expired, run " +
+            "aws sso login first.",
+          "Using a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) instead? Pick " +
+            "Amazon Bedrock (API key).",
+          "ENABLE_TOOL_SEARCH=true matters here for the same reason as on the " +
+            "plain Anthropic route above.",
+        ],
+      },
+      {
+        id: "bedrock-api-key",
+        label: "Amazon Bedrock (API key)",
+        upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
+        resolveUpstream: bedrockApiKeyUpstream,
+        renderer: "anthropic",
+        env: [
+          ["ANTHROPIC_BEDROCK_BASE_URL", "{baseUrl}"],
+          ["ENABLE_TOOL_SEARCH", "true"],
+        ],
+        bin: "claude",
+        notes: [
+          "This assumes CLAUDE_CODE_USE_BEDROCK=1 and AWS_BEARER_TOKEN_BEDROCK " +
+            "are already exported in your shell.",
+          "Do not set CLAUDE_CODE_SKIP_BEDROCK_AUTH here: it makes Claude Code " +
+            "drop the API key, and the proxy does not sign on this route.",
+          "ENABLE_TOOL_SEARCH=true matters here for the same reason as on the " +
+            "plain Anthropic route above.",
         ],
       },
     ],

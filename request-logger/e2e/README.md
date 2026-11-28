@@ -17,12 +17,12 @@ The first run installs each pinned agent under `request-logger/e2e/.tools/`
 `driver.ts` does the same thing for every recipe:
 
 1. Starts `fake-upstream.ts`. It answers Anthropic `messages` (and Vertex's
-   `:streamRawPredict`), OpenAI `chat/completions` (OpenAI's shape, or
+   `:streamRawPredict`, and Bedrock's `/model/{id}/invoke-with-response-stream` as binary AWS event-stream frames), OpenAI `chat/completions` (OpenAI's shape, or
    Mistral's list-shaped content with `chat: "mistral"`), OpenAI `responses`
    and `models`, streamed when the request asks for a stream. Every reply is
    the one canned string `CANNED-REPLY-FROM-FAKE-UPSTREAM`.
 2. Starts the real `proxy.ts`, unmodified, with a saved choice for the
-   recipe's registry entry and the two test-only variables:
+   recipe's registry entry, the recipe's `proxyEnv` if it has one, and the two test-only variables:
    - `REQUEST_LOGGER_TEST_DIR`: the saved choice and `logs/` live in a
      scratch folder, so your own `.agent-choice.json` and `logs/` are never
      read or written;
@@ -67,9 +67,7 @@ export const codex: Recipe = {
 
 Register it in `recipes/index.ts`. Optional fields: `chat` (the
 chat/completions shape), `files` (extra files in the scratch `HOME`),
-`sendsKey: false` (a route with no credential at all, which turns the key
-checks off), `extraChecks` (checks only this agent needs, given the capture
-and every request the upstream saw), `timeoutMs`.
+`sendsKey: false` (a route with no credential at all, which turns the key checks off), `proxyEnv` (what the proxy reads from its own shell, such as Bedrock's `AWS_REGION` and test AWS credentials, never real ones), `extraChecks` (checks only this agent needs, given the capture, every log file and every request the upstream saw), `timeoutMs`.
 
 `install` returns `{ skip: reason }` when the agent cannot be installed here
 (no network, no `python3`). A plain run reports the skip and passes, and
@@ -83,6 +81,7 @@ enforces this in the unit suite.
 
 | Entry | Status |
 | --- | --- |
+| `claude-code/bedrock`, `claude-code/bedrock-api-key` | recipe, passes. The proxy signs with test credentials, and the checks cover the signature's scope, the session token, the payload hash, and that no secret reaches a log file |
 | `claude-code/anthropic`, `codex/openai`, `opencode/anthropic`, `opencode/openai`, `pi/anthropic`, `pi/openai`, `mistral-vibe/mistral` | recipe, passes |
 | `claude-code/vertex` | recipe written, not registered: the call arrives on `/projects/…` without `/v1`, which real Vertex 404s |
 | `codex/chatgpt`, `pi/codex`, `copilot/github`, `gemini/google-login` | need a real login |
