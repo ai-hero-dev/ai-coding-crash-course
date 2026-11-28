@@ -49,6 +49,11 @@ export interface AgentChoice {
   region?: string;
 }
 
+export interface AwsSigning {
+  region: string;
+  service: string;
+}
+
 export interface ResolvedTarget {
   kind: "target";
   agent: string;
@@ -62,6 +67,7 @@ export interface ResolvedTarget {
    * AI. Absent for a provider whose agent already sends the full path.
    */
   upstreamPathPrefix?: string;
+  awsSigning?: AwsSigning;
   renderer: RendererId;
   /** The base URL the student points their agent at, e.g. http://localhost:8787/v1 */
   baseUrl: string;
@@ -191,7 +197,13 @@ interface ProviderEntry {
     choice: AgentChoice,
     env: NodeJS.ProcessEnv
   ) =>
-    { host: string; pathPrefix?: string; notes?: string[] } | { error: string };
+    | {
+        host: string;
+        pathPrefix?: string;
+        notes?: string[];
+        awsSigning?: AwsSigning;
+      }
+    | { error: string };
   renderer: RendererId;
   /**
    * Appended to http://localhost:PORT to make the base URL.
@@ -1557,12 +1569,14 @@ export function resolveChoice(
 
   let upstreamHost = provider.upstreamHost;
   let upstreamPathPrefix: string | undefined;
+  let awsSigning: AwsSigning | undefined;
   let extraNotes: string[] = [];
   if (provider.resolveUpstream) {
     const upstream = provider.resolveUpstream(choice, options.env ?? {});
     if ("error" in upstream) return { kind: "error", message: upstream.error };
     upstreamHost = upstream.host;
     upstreamPathPrefix = upstream.pathPrefix;
+    awsSigning = upstream.awsSigning;
     extraNotes = upstream.notes ?? [];
   }
 
@@ -1574,6 +1588,7 @@ export function resolveChoice(
     providerLabel: provider.label,
     upstreamHost,
     ...(upstreamPathPrefix ? { upstreamPathPrefix } : {}),
+    ...(awsSigning ? { awsSigning } : {}),
     renderer: provider.renderer,
     baseUrl,
     command: buildCommand(provider, baseUrl, options.platform),

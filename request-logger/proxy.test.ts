@@ -7,8 +7,11 @@ import {
   BURST_THRESHOLD,
   BURST_WINDOW_MS,
   burstKey,
+  listenHosts,
   readSettings,
+  refuseBrowserCaller,
   rejectUpgrade,
+  signedHeaders,
   TEST_DIR_ENV,
   TEST_UPSTREAM_ENV,
   trackBurst,
@@ -417,5 +420,92 @@ describe("upstreamConnection with the test-only upstream override", () => {
       port: 443,
       useHttps: true,
     });
+  });
+});
+
+function bedrockSigningTarget() {
+  const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+  if (target.kind !== "target") throw new Error("expected a catalogue target");
+  return {
+    ...target,
+    upstreamHost: "bedrock-runtime.us-east-1.amazonaws.com",
+    awsSigning: { region: "us-east-1", service: "bedrock" },
+  };
+}
+
+describe("signedHeaders", () => {
+  const env = { AWS_ACCESS_KEY_ID: "AKID", AWS_SECRET_ACCESS_KEY: "SECRET" };
+
+  it("replaces any signature the agent made with a fresh one", async () => {
+    const out = await signedHeaders(
+      bedrockSigningTarget(),
+      {
+        authorization: "AWS4-HMAC-SHA256 old",
+        "x-amz-date": "old",
+        "x-amz-security-token": "old",
+        "content-type": "application/json",
+      },
+      "POST",
+      "bedrock-runtime.us-east-1.amazonaws.com",
+      "/model/m/invoke",
+      Buffer.from("{}"),
+      env
+    );
+    expect(out["content-type"]).toBe("application/json");
+    expect(out.authorization).toMatch(
+      /^AWS4-HMAC-SHA256 Credential=AKID\/\d{8}\/us-east-1\/bedrock\/aws4_request, /
+    );
+    expect(out["x-amz-date"]).not.toBe("old");
+    expect(out).not.toHaveProperty("x-amz-security-token");
+  });
+
+  it("hands every other target its headers back untouched", async () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    const headers = { authorization: "Bearer keep", "x-amz-foo": "keep" };
+    expect(
+      await signedHeaders(target, headers, "POST", "h", "/p", Buffer.alloc(0), env)
+    ).toBe(headers);
+  });
+});
+
+describe("listenHosts", () => {
+  it("keeps a signing target on loopback only, IPv4 and IPv6", () => {
+    expect(listenHosts(bedrockSigningTarget())).toEqual(["127.0.0.1", "::1"]);
+  });
+
+  it("does not change where every other target listens", () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    expect(listenHosts(target)).toEqual([undefined]);
+  });
+});
+
+describe("refuseBrowserCaller", () => {
+  it("lets an agent on this machine through", () => {
+    for (const host of ["localhost:8787", "127.0.0.1:8787", "[::1]:8787", "LOCALHOST:8787"]) {
+      expect(refuseBrowserCaller(bedrockSigningTarget(), { host }, 8787)).toBeNull();
+    }
+  });
+
+  it("refuses a request a web page sent, which always has an Origin", () => {
+    expect(
+      refuseBrowserCaller(
+        bedrockSigningTarget(),
+        { host: "localhost:8787", origin: "https://evil.example" },
+        8787
+      )
+    ).toContain("Origin");
+  });
+
+  it("refuses a rebound hostname, a wrong port or no Host at all", () => {
+    for (const host of ["evil.example:8787", "localhost:9999", undefined]) {
+      expect(refuseBrowserCaller(bedrockSigningTarget(), { host }, 8787)).toContain("Host");
+    }
+  });
+
+  it("never refuses a target that signs nothing", () => {
+    const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
+    expect(
+      refuseBrowserCaller(target, { host: "evil.example", origin: "https://x" }, 8787)
+    ).toBeNull();
   });
 });

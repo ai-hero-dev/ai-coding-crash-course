@@ -24,6 +24,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { styleText } from "node:util";
 import { renderMarkdown } from "./render";
+import { createCredentialProvider, signRequest } from "./bedrock";
 import {
   resolveChoice,
   shouldLogRequest,
@@ -208,11 +209,79 @@ function forwardHeaders(
   return out;
 }
 
+let awsCredentials: ReturnType<typeof createCredentialProvider> | null = null;
+
+export async function signedHeaders(
+  target: ProxyTarget,
+  headers: http.OutgoingHttpHeaders,
+  method: string,
+  hostname: string,
+  upstreamPath: string,
+  body: Buffer,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<http.OutgoingHttpHeaders> {
+  if (target.kind !== "target" || !target.awsSigning) return headers;
+  awsCredentials ??= createCredentialProvider(env);
+  const credentials = await awsCredentials.get();
+  const kept: http.OutgoingHttpHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const k = key.toLowerCase();
+    if (k === "authorization" || k.startsWith("x-amz-")) continue;
+    kept[key] = value;
+  }
+  return {
+    ...kept,
+    ...signRequest({
+      method,
+      hostname,
+      path: upstreamPath,
+      body,
+      region: target.awsSigning.region,
+      service: target.awsSigning.service,
+      credentials,
+    }),
+  };
+}
+
+export function listenHosts(target: ProxyTarget): Array<string | undefined> {
+  return target.kind === "target" && target.awsSigning
+    ? ["127.0.0.1", "::1"]
+    : [undefined];
+}
+
+export function refuseBrowserCaller(
+  target: ProxyTarget,
+  headers: http.IncomingHttpHeaders,
+  port: number
+): string | null {
+  if (target.kind !== "target" || !target.awsSigning) return null;
+  if (headers.origin !== undefined) {
+    return `it has an Origin header (${headers.origin}), so a web page sent it`;
+  }
+  const host = (headers.host ?? "").toLowerCase();
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].map((h) => `${h}:${port}`);
+  if (!loopback.includes(host)) {
+    return `its Host header is "${headers.host ?? ""}", not localhost:${port}`;
+  }
+  return null;
+}
+
 function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   target: ProxyTarget
 ): void {
+  const refused = refuseBrowserCaller(target, req.headers, PORT);
+  if (refused) {
+    console.warn(
+      `[request-logger] refused ${req.method ?? "GET"} ${req.url ?? "/"}: ${refused}. ` +
+        "This route signs with your AWS credentials, so only an agent on this machine may use it."
+    );
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `request-logger refused this request: ${refused}` }));
+    req.resume();
+    return;
+  }
   const reqPath = req.url ?? "/";
   // The path actually sent upstream: the agent's own request path, prefixed
   // with whatever path segment the student's custom base URL carried (e.g.
@@ -234,6 +303,7 @@ function handle(
     );
 
     const onUpstreamResponse = (upstreamRes: http.IncomingMessage) => {
+      if (upstreamRes.statusCode === 403) awsCredentials?.invalidate();
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       const responseChunks: Buffer[] = [];
       upstreamRes.on("data", (chunk: Buffer) => {
@@ -242,7 +312,7 @@ function handle(
       });
       upstreamRes.on("end", () => {
         res.end();
-        const responseRaw = Buffer.concat(responseChunks).toString("utf8");
+        const responseRaw = Buffer.concat(responseChunks);
         writeCapture({
           base,
           target,
@@ -258,21 +328,7 @@ function handle(
       });
     };
 
-    const requestOptions: http.RequestOptions = {
-      hostname,
-      port,
-      path: upstreamPath,
-      method: req.method,
-      headers: {
-        ...forwardHeaders(req.headers, body),
-        host: hostname,
-      },
-    };
-    const upstreamReq = useHttps
-      ? https.request(requestOptions, onUpstreamResponse)
-      : http.request(requestOptions, onUpstreamResponse);
-
-    upstreamReq.on("error", (err) => {
+    const fail = (err: Error) => {
       console.error(`[request-logger] upstream error: ${err.message}`);
       if (!res.headersSent) {
         res.writeHead(502, { "content-type": "application/json" });
@@ -282,10 +338,30 @@ function handle(
           error: `request-logger upstream error: ${err.message}`,
         })
       );
-    });
+    };
 
-    if (body.length > 0) upstreamReq.write(body);
-    upstreamReq.end();
+    signedHeaders(
+      target,
+      forwardHeaders(req.headers, body),
+      req.method ?? "POST",
+      hostname,
+      upstreamPath,
+      body
+    ).then((headers) => {
+      const requestOptions: http.RequestOptions = {
+        hostname,
+        port,
+        path: upstreamPath,
+        method: req.method,
+        headers: { ...headers, host: hostname },
+      };
+      const upstreamReq = useHttps
+        ? https.request(requestOptions, onUpstreamResponse)
+        : http.request(requestOptions, onUpstreamResponse);
+      upstreamReq.on("error", fail);
+      if (body.length > 0) upstreamReq.write(body);
+      upstreamReq.end();
+    }, fail);
   });
 }
 
@@ -326,7 +402,7 @@ interface Capture {
   headers: http.IncomingHttpHeaders;
   requestBody: Buffer;
   requestEncoding?: string;
-  responseRaw: string;
+  responseRaw: Buffer;
 }
 
 // ---------------------------------------------------------------------------
@@ -656,11 +732,16 @@ async function main(): Promise<void> {
   }
 
   const target = resolution;
-  const server = http.createServer((req, res) => handle(req, res, target));
-  server.on("upgrade", rejectUpgrade);
-  server.listen(PORT, () => {
-    printBanner(target);
-  });
+  const listen = (host: string | undefined, onListening?: () => void) => {
+    const server = http.createServer((req, res) => handle(req, res, target));
+    server.on("upgrade", rejectUpgrade);
+    if (host) server.listen(PORT, host, onListening);
+    else server.listen(PORT, onListening);
+    return server;
+  };
+  const [required, ...optional] = listenHosts(target);
+  listen(required, () => printBanner(target));
+  for (const host of optional) listen(host).on("error", () => {});
 }
 
 /** Print a labelled paragraph, indented and wrapped. */
