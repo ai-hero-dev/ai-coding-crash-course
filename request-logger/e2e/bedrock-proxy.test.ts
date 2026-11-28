@@ -106,6 +106,19 @@ describe("Bedrock's signing route, through the real proxy", () => {
     expect(upstream.seen).toEqual([]);
   });
 
+  it("refuses Claude Code's GET /inference-profiles quietly, without the browser warning", async () => {
+    upstream = await startFakeUpstream();
+    const port = await start(upstream.origin, KEYS);
+    let printed = "";
+    proxy!.proxy.stdout!.on("data", (d) => (printed += d));
+    proxy!.proxy.stderr!.on("data", (d) => (printed += d));
+    expect((await send(port, { method: "GET", path: "/inference-profiles?type=SYSTEM_DEFINED" })).status).toBe(403);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(printed).toContain("not a Bedrock model call, so not signed");
+    expect(printed).not.toContain("only an agent on this machine");
+    expect(upstream.seen).toEqual([]);
+  });
+
   it("runs the AWS CLI once, not once per request, when every call comes back 403", async () => {
     denying = http.createServer((req, res) => {
       req.resume();

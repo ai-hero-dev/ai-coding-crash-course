@@ -273,14 +273,10 @@ export function listenHosts(target: ProxyTarget): Array<string | undefined> {
 
 export function refuseBrowserCaller(
   target: ProxyTarget,
-  method: string | undefined,
   headers: http.IncomingHttpHeaders,
   port: number
 ): string | null {
   if (target.kind !== "target" || !target.awsSigning) return null;
-  if (method !== "POST") {
-    return `it is a ${method ?? "request with no method"}, and Bedrock's model calls are all POST`;
-  }
   const fetchSite = headers["sec-fetch-site"];
   if (fetchSite !== undefined && fetchSite !== "none") {
     return `its Sec-Fetch-Site is ${shown(fetchSite)}, so a web page sent it`;
@@ -298,11 +294,15 @@ export function refuseBrowserCaller(
   return null;
 }
 
-export function refuseNonModelCall(target: ProxyTarget, url: string | undefined): string | null {
+export function refuseNonModelCall(
+  target: ProxyTarget,
+  method: string | undefined,
+  url: string | undefined
+): string | null {
   if (target.kind !== "target" || !target.awsSigning) return null;
-  return isBedrockModelCall(url ?? "")
+  return method === "POST" && isBedrockModelCall(url ?? "")
     ? null
-    : "it is not a Bedrock model call (POST /model/{id}/invoke, invoke-with-response-stream, converse, converse-stream or count-tokens)";
+    : "not a Bedrock model call, so not signed";
 }
 
 function handle(
@@ -310,14 +310,19 @@ function handle(
   res: http.ServerResponse,
   target: ProxyTarget
 ): void {
-  const refused =
-    refuseBrowserCaller(target, req.method, req.headers, PORT) ??
-    refuseNonModelCall(target, req.url);
+  const fromBrowser = refuseBrowserCaller(target, req.headers, PORT);
+  const refused = fromBrowser ?? refuseNonModelCall(target, req.method, req.url);
   if (refused) {
-    console.warn(
-      `[request-logger] refused ${req.method ?? "GET"} ${shown(req.url)}: ${refused}. ` +
-        "This route signs with your AWS credentials, so only an agent on this machine may use it."
-    );
+    if (fromBrowser) {
+      console.warn(
+        `[request-logger] refused ${req.method ?? "GET"} ${shown(req.url)}: ${refused}. ` +
+          "This route signs with your AWS credentials, so only an agent on this machine may use it."
+      );
+    } else {
+      console.log(
+        dim(`[request-logger] ${target.agentLabel}  ${req.method ?? "GET"} ${shown(req.url)} -> 403  (${refused})`)
+      );
+    }
     res.writeHead(403, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: `request-logger refused this request: ${refused}` }));
     req.resume();

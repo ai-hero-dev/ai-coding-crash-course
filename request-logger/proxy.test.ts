@@ -490,7 +490,8 @@ describe("listenHosts", () => {
 
 describe("refuseBrowserCaller", () => {
   const refuse = (method: string | undefined, headers: Record<string, string | undefined>) =>
-    refuseBrowserCaller(bedrockSigningTarget(), method, headers, 8787);
+    refuseBrowserCaller(bedrockSigningTarget(), headers, 8787) ??
+    refuseNonModelCall(bedrockSigningTarget(), method, "/model/m/invoke");
 
   it("lets an agent on this machine through", () => {
     for (const host of ["localhost:8787", "127.0.0.1:8787", "[::1]:8787", "LOCALHOST:8787"]) {
@@ -511,7 +512,7 @@ describe("refuseBrowserCaller", () => {
 
   it("refuses anything but a POST", () => {
     for (const method of ["GET", "HEAD", "PUT", "DELETE", undefined]) {
-      expect(refuse(method, { host: "localhost:8787" })).toContain("POST");
+      expect(refuse(method, { host: "localhost:8787" })).toContain("not a Bedrock model call");
     }
   });
 
@@ -522,9 +523,9 @@ describe("refuseBrowserCaller", () => {
   });
 
   it("accepts a Host with no port when the proxy listens on port 80", () => {
-    expect(refuseBrowserCaller(bedrockSigningTarget(), "POST", { host: "localhost" }, 80)).toBeNull();
-    expect(refuseBrowserCaller(bedrockSigningTarget(), "POST", { host: "localhost:80" }, 80)).toBeNull();
-    expect(refuseBrowserCaller(bedrockSigningTarget(), "POST", { host: "localhost" }, 8787)).toContain("Host");
+    expect(refuseBrowserCaller(bedrockSigningTarget(), { host: "localhost" }, 80)).toBeNull();
+    expect(refuseBrowserCaller(bedrockSigningTarget(), { host: "localhost:80" }, 80)).toBeNull();
+    expect(refuseBrowserCaller(bedrockSigningTarget(), { host: "localhost" }, 8787)).toContain("Host");
   });
 
   it("refuses a rebound hostname, a wrong port or no Host at all", () => {
@@ -536,19 +537,20 @@ describe("refuseBrowserCaller", () => {
   it("never refuses a target that signs nothing", () => {
     const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
     expect(
-      refuseBrowserCaller(target, "GET", { host: "evil.example", origin: "https://x", "sec-fetch-site": "cross-site" }, 8787)
+      refuseBrowserCaller(target, { host: "evil.example", origin: "https://x", "sec-fetch-site": "cross-site" }, 8787)
     ).toBeNull();
   });
 });
 
 describe("refuseNonModelCall", () => {
   it("lets a model call through and refuses any other path on the signing route", () => {
-    expect(refuseNonModelCall(bedrockSigningTarget(), "/model/m/invoke-with-response-stream")).toBeNull();
-    expect(refuseNonModelCall(bedrockSigningTarget(), "/async-invoke")).toContain("not a Bedrock model call");
+    expect(refuseNonModelCall(bedrockSigningTarget(), "POST", "/model/m/invoke-with-response-stream")).toBeNull();
+    expect(refuseNonModelCall(bedrockSigningTarget(), "POST", "/async-invoke")).toContain("not a Bedrock model call");
+    expect(refuseNonModelCall(bedrockSigningTarget(), "GET", "/model/m/invoke")).toContain("not a Bedrock model call");
   });
 
   it("never refuses a target that signs nothing", () => {
     const target = proxyTarget({ agent: "claude-code", provider: "anthropic" }, PORT);
-    expect(refuseNonModelCall(target, "/anything")).toBeNull();
+    expect(refuseNonModelCall(target, "GET", "/anything")).toBeNull();
   });
 });
